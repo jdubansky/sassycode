@@ -59,6 +59,48 @@ def migrate_db() -> None:
         for col, coltype in adds:
             conn.exec_driver_sql(f"ALTER TABLE findings ADD COLUMN {col} {coltype} NULL")
 
+        # unique_findings: create table if not exists (SQLite lacks IF NOT EXISTS for constraints, but CREATE TABLE IF NOT EXISTS is fine)
+        conn.exec_driver_sql(
+            """
+CREATE TABLE IF NOT EXISTS unique_findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    fingerprint VARCHAR(128) NOT NULL,
+    file_path TEXT NOT NULL,
+    cwe VARCHAR(256),
+    function_name VARCHAR(255),
+    entrypoint VARCHAR(255),
+    first_seen_at DATETIME,
+    last_seen_at DATETIME,
+    occurrences INTEGER,
+    last_line INTEGER,
+    last_severity VARCHAR(16),
+    last_description TEXT,
+    severity VARCHAR(16),
+    description TEXT
+);
+"""
+        )
+
+        # Add unique index for (project_id, fingerprint)
+        conn.exec_driver_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_unique_finding_fingerprint ON unique_findings(project_id, fingerprint)"
+        )
+
+        # Add unique_finding_id to findings if missing
+        existing = table_columns("findings")
+        if "unique_finding_id" not in existing:
+            conn.exec_driver_sql("ALTER TABLE findings ADD COLUMN unique_finding_id INTEGER NULL REFERENCES unique_findings(id) ON DELETE SET NULL")
+
+        # Add newly introduced columns if missing on existing DBs
+        existing_unique = table_columns("unique_findings")
+        for col, coltype in [
+            ("severity", "VARCHAR(16)"),
+            ("description", "TEXT"),
+        ]:
+            if col not in existing_unique:
+                conn.exec_driver_sql(f"ALTER TABLE unique_findings ADD COLUMN {col} {coltype} NULL")
+
 
 @contextmanager
 def session_scope() -> Generator[Session, None, None]:

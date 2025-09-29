@@ -14,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from .db import init_db, migrate_db, session_scope, SessionLocal
-from .models import Project, Scan, Finding, ScanLog
+from .models import Project, Scan, Finding, ScanLog, UniqueFinding
 
 
 load_dotenv()
@@ -67,7 +67,9 @@ def project_detail(project_id: int, request: Request, db: Session = Depends(get_
     if not project:
         return RedirectResponse(url="/", status_code=303)
     scans = db.query(Scan).filter(Scan.project_id == project_id).order_by(Scan.id.desc()).all()
-    return templates.TemplateResponse("project.html", {"request": request, "project": project, "scans": scans})
+    # Expose db and models to template for Unique Findings query
+    from . import models as models
+    return templates.TemplateResponse("project.html", {"request": request, "project": project, "scans": scans, "db": db, "models": models})
 
 
 @app.get("/projects/{project_id}/edit", response_class=HTMLResponse)
@@ -163,9 +165,54 @@ def trigger_scan(project_id: int = Form(...), model: str = Form(...), deep: str 
             findings = obj.get("findings", [])
             with session_scope() as session:
                 for f in findings:
+                    # Build fingerprint: file_path + cwe + function_name + entrypoint (normalized)
+                    fp_parts = [
+                        (f.get("file_path") or "").strip().lower(),
+                        ",".join(f.get("cwe", []) or []) if isinstance(f.get("cwe"), list) else (f.get("cwe") or ""),
+                        (f.get("function_name") or "").strip().lower(),
+                        (f.get("entrypoint") or "").strip().lower(),
+                    ]
+                    fingerprint = "|".join(fp_parts)
+
+                    # Upsert UniqueFinding
+                    uf = session.query(UniqueFinding).filter(
+                        UniqueFinding.project_id == project.id,
+                        UniqueFinding.fingerprint == fingerprint,
+                    ).one_or_none()
+                    if uf is None:
+                        uf = UniqueFinding(
+                            project_id=project.id,
+                            fingerprint=fingerprint,
+                            file_path=f.get("file_path", ""),
+                            cwe=",".join(f.get("cwe", []) or []) or None,
+                            function_name=f.get("function_name"),
+                            entrypoint=f.get("entrypoint"),
+                            last_line=f.get("line"),
+                            last_severity=f.get("severity"),
+                            last_description=f.get("description"),
+                            severity=f.get("severity"),
+                            description=f.get("description"),
+                        )
+                        session.add(uf)
+                        session.flush()
+                    else:
+                        uf.last_seen_at = datetime.utcnow()
+                        uf.occurrences = (uf.occurrences or 0) + 1
+                        uf.last_line = f.get("line")
+                        uf.last_severity = f.get("severity")
+                        uf.last_description = f.get("description")
+                        # Optionally update canonical severity/description (prefer highest severity)
+                        sev = f.get("severity")
+                        sev_order = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+                        if sev and (uf.severity is None or sev_order.get(sev, 0) > sev_order.get(uf.severity, 0)):
+                            uf.severity = sev
+                        if not uf.description and f.get("description"):
+                            uf.description = f.get("description")
+
                     session.add(
                         Finding(
                             scan_id=scan_id,
+                            unique_finding_id=uf.id,
                             file_path=f.get("file_path", ""),
                             severity=f.get("severity", "LOW"),
                             line=f.get("line"),

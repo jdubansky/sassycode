@@ -10,6 +10,7 @@
   --border: #e5e7eb;
   --accent: #f2f4f8;
   --code-bg: #f6f8fa;
+  --input-bg: #ffffff;
 }
 
 [data-theme="dark"] {
@@ -23,6 +24,7 @@
   --border: #1e2433;
   --accent: #11162a;
   --code-bg: #121828;
+  --input-bg: #0f1528;
 }
 
 * { box-sizing: border-box; }
@@ -30,7 +32,7 @@
 body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; color: var(--text); background: linear-gradient(180deg, var(--bg), #ffffff 60%); }
 [data-theme="dark"] body { background: linear-gradient(180deg, var(--bg), #0b0f1a 60%); }
 
-.container { max-width: 1100px; margin: 0 auto; padding: 28px 20px; }
+.container { max-width: 1100px; margin: 0; padding: 28px 20px; }
 
 h1, h2 { margin: 16px 0; }
 h1 { font-size: 40px; letter-spacing: -0.02em; }
@@ -49,7 +51,9 @@ th { background: var(--accent); color: #d3d9e5; }
 tr:last-child td { border-bottom: 0; }
 
 form { margin-bottom: 16px; }
-input[type="text"], input[type="search"], input[type="number"], input[type="password"] { padding: 10px 12px; background: #0f1528; border: 1px solid var(--border); border-radius: 8px; color: var(--text); width: 100%; max-width: 360px; }
+input[type="text"], input[type="search"], input[type="number"], input[type="password"] { padding: 10px 12px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); width: 100%; max-width: 360px; }
+input::placeholder { color: var(--muted); }
+select { padding: 10px 12px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); }
 button { padding: 10px 14px; border-radius: 8px; border: 1px solid transparent; cursor: pointer; background: var(--accent); color: var(--text); }
 button:hover { border-color: var(--border); }
 .btn-primary { background: var(--primary-600); border-color: #2f5fd7; color: white; }
@@ -70,4 +74,9 @@ button:hover { border-color: var(--border); }
 .muted { color: var(--muted); }
 
 pre { background: var(--code-bg); color: inherit; padding:12px; border-radius:12px; border:1px solid var(--border); }
+
+/* Layout helpers */
+.grid-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.scroll-panel { max-height: 360px; overflow: auto; }
+.panel h2 { margin-top: 0; }
 

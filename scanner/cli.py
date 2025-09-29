@@ -19,7 +19,8 @@ SUPPORTED_EXTENSIONS = {
 # Directory names to skip anywhere in the tree (case-insensitive by name)
 SKIP_DIR_NAMES = {
     ".git", "node_modules", ".venv", "venv", "dist", "build",
-    "test", "tests", "doc", "docs",
+    "test", "tests", "doc", "docs","lib","libs","scripts","scripts",
+    "tools","packages","etc","etcs","utils","utils"
 }
 
 

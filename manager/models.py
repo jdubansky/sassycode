@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Integer, DateTime, ForeignKey, Text
+from sqlalchemy import String, Integer, DateTime, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -37,6 +37,7 @@ class Finding(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     scan_id: Mapped[int] = mapped_column(ForeignKey("scans.id", ondelete="CASCADE"))
+    unique_finding_id: Mapped[Optional[int]] = mapped_column(ForeignKey("unique_findings.id", ondelete="SET NULL"), nullable=True)
     file_path: Mapped[str] = mapped_column(Text)
     severity: Mapped[str] = mapped_column(String(16))
     line: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -52,6 +53,31 @@ class Finding(Base):
     details_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     scan: Mapped[Scan] = relationship(back_populates="findings")
+
+
+class UniqueFinding(Base):
+    __tablename__ = "unique_findings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    fingerprint: Mapped[str] = mapped_column(String(128))
+    file_path: Mapped[str] = mapped_column(Text)
+    cwe: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    function_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    entrypoint: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    occurrences: Mapped[int] = mapped_column(Integer, default=1)
+    last_line: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_severity: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    last_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Canonical/representative values
+    severity: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "fingerprint", name="uq_unique_finding_fingerprint"),
+    )
 
 
 class ScanLog(Base):

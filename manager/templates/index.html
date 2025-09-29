@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>sassycode - projects</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <div class="container">
+      <div class="topbar">
+        <button data-theme-toggle title="Toggle theme">Toggle theme</button>
+      </div>
+      <h1>Projects</h1>
+      <div class="panel">
+        <form class="toolbar" method="post" action="/projects">
+          <input type="text" name="name" placeholder="Project name" required />
+          <input type="text" name="path" placeholder="Path to folder" required />
+          <button class="btn-primary" type="submit">Add Project</button>
+        </form>
+      </div>
+
+      <ul class="list" style="margin-top:16px;">
+        {% for p in projects %}
+        <li>
+          <a href="/projects/{{ p.id }}"><strong>{{ p.name }}</strong></a>
+          <span class="muted">—</span>
+          <code>{{ p.path }}</code>
+          <a href="/projects/{{ p.id }}/edit" style="margin-left:8px;">Edit</a>
+        </li>
+        {% else %}
+        <li class="muted">No projects yet.</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+  </html>
+
+

@@ -1,0 +1,123 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>sassycode - scan</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <div class="container">
+      <a href="/projects/{{ scan.project.id }}">← Back to project</a>
+      <h1>Scan #{{ scan.id }} - <span class="badge" id="status">{{ scan.status }}</span></h1>
+    <form id="cancelForm" method="post" action="/scans/{{ scan.id }}/cancel" style="display: {{ 'block' if scan.status == 'running' else 'none' }}; margin: 8px 0;">
+      <button type="submit" style="background:#b00020;color:white;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;">Stop scan</button>
+    </form>
+    <p>Model: <code>{{ scan.model }}</code></p>
+    <p>Project: <code>{{ scan.project.name }}</code></p>
+    <h2>Findings</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Severity</th>
+          <th>File</th>
+          <th>Line</th>
+          <th>Description</th>
+          <th>CWE</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in findings %}
+        <tr>
+          <td><span class="badge sev-{{ f.severity }}">{{ f.severity }}</span></td>
+          <td><code>{{ f.file_path }}</code></td>
+          <td>{{ f.line or '-' }}</td>
+          <td>{{ f.description }}</td>
+          <td>{{ f.cwe or '-' }}</td>
+        </tr>
+        {% if f.recommendation or f.function_name or f.entrypoint or f.arguments or f.root_cause or f.details_json %}
+        <tr>
+          <td colspan="5">
+            {% if f.recommendation %}<div><strong>Remediation:</strong> {{ f.recommendation }}</div>{% endif %}
+            {% if f.function_name %}<div><strong>Function:</strong> <code>{{ f.function_name }}</code></div>{% endif %}
+            {% if f.entrypoint %}<div><strong>Entrypoint:</strong> <code>{{ f.entrypoint }}</code></div>{% endif %}
+            {% if f.arguments %}<div><strong>Arguments:</strong> {{ f.arguments }}</div>{% endif %}
+            {% if f.root_cause %}<div><strong>Root cause:</strong> {{ f.root_cause }}</div>{% endif %}
+            {% if f.details_json %}
+              {% set d = loads(f.details_json) %}
+              {% if d.explanation %}<div><strong>Explanation:</strong> {{ d.explanation }}</div>{% endif %}
+              {% if d.impact %}<div><strong>Impact:</strong> {{ d.impact }}</div>{% endif %}
+              {% if d.proof_of_concept %}<div><strong>PoC:</strong> <code>{{ d.proof_of_concept }}</code></div>{% endif %}
+              {% if d.fix_suggestion %}<div><strong>Fix suggestion:</strong> {{ d.fix_suggestion }}</div>{% endif %}
+              {% if d.references %}
+                <div><strong>References:</strong>
+                  {% for r in d.references %}
+                    <a href="{{ r }}" target="_blank" rel="noreferrer">{{ r }}</a>{% if not loop.last %}, {% endif %}
+                  {% endfor %}
+                </div>
+              {% endif %}
+              {% if d.evidence and d.evidence.snippet %}
+                <div style="margin-top:8px;">
+                  <strong>Evidence (lines {{ d.evidence.start_line }}-{{ d.evidence.end_line }}):</strong>
+                  <pre>{{ d.evidence.snippet }}</pre>
+                </div>
+              {% endif %}
+            {% endif %}
+          </td>
+        </tr>
+        {% endif %}
+        {% else %}
+        <tr><td colspan="5">No findings.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h2>Logs</h2>
+    <pre id="logbox" style="overflow:auto;max-height:300px;">
+{% for log in logs %}[{{ log.created_at }}] {{ log.level }}: {{ log.message }}
+{% endfor %}
+    </pre>
+
+    <script>
+      (function() {
+        const statusEl = document.getElementById('status');
+        const logbox = document.getElementById('logbox');
+        const cancelForm = document.getElementById('cancelForm');
+        const scanId = {{ scan.id }};
+        let lastRendered = logbox.textContent;
+
+        async function tick() {
+          try {
+            const res = await fetch(`/scans/${scanId}/logs.json`, { cache: 'no-store' });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (data.status) statusEl.textContent = data.status;
+            if (typeof data.can_cancel !== 'undefined') {
+              cancelForm.style.display = data.can_cancel ? 'block' : 'none';
+            }
+            if (Array.isArray(data.logs)) {
+              const text = data.logs.map(l => `[${l.created_at}] ${l.level}: ${l.message}`).join('\n');
+              if (text !== lastRendered) {
+                logbox.textContent = text + (text.endsWith('\n') ? '' : '\n');
+                logbox.scrollTop = logbox.scrollHeight;
+                lastRendered = text;
+              }
+            }
+          } catch (e) {
+            // ignore poll errors
+          } finally {
+            if (statusEl.textContent === 'running' || statusEl.textContent === 'pending') {
+              setTimeout(tick, 1000);
+            } else {
+              setTimeout(tick, 4000);
+            }
+          }
+        }
+        setTimeout(tick, 600);
+      })();
+    </script>
+    <script src="/static/app.js"></script>
+    </div>
+  </body>
+  </html>
+
+

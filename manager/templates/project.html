@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>sassycode - project</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <div class="container">
+      <a href="/">← All projects</a>
+      <h1>{{ project.name }} <a href="/projects/{{ project.id }}/edit" style="font-size:14px; margin-left:8px;">Edit</a></h1>
+      <p><code>{{ project.path }}</code></p>
+
+      <div class="panel">
+        <h2>Trigger Scan</h2>
+        <form class="toolbar" method="post" action="/scans">
+          <input type="hidden" name="project_id" value="{{ project.id }}" />
+          <select name="model" required>
+            <option value="gpt-5">gpt-5</option>
+            <option value="gpt-4o">gpt-4o</option>
+            <option value="gpt-4o-mini" selected>gpt-4o-mini</option>
+          </select>
+          <label class="muted" style="display:flex;align-items:center;gap:6px;">
+            <input type="checkbox" name="deep" value="1" /> Deep analysis
+          </label>
+          <button class="btn-primary" type="submit">Run Scan</button>
+        </form>
+      </div>
+
+      <h2>Scans</h2>
+      <ul class="list">
+        {% for s in scans %}
+        <li>
+          <a href="/scans/{{ s.id }}">Scan #{{ s.id }}</a>
+          <span class="badge" style="margin-left:8px;">{{ s.status }}</span>
+          <span class="muted">{{ s.model }}</span>
+        </li>
+        {% else %}
+        <li class="muted">No scans yet.</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+  </html>
+
+

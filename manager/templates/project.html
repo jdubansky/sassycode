@@ -6,6 +6,15 @@
     <link rel="stylesheet" href="/static/style.css">
   </head>
   <body>
+    <header class="app-header">
+      <div class="header-bar">
+        <div class="brand">sassycode</div>
+        <nav class="nav-links">
+          <a href="/">Projects</a>
+          <a href="/schedules">Schedules</a>
+        </nav>
+      </div>
+    </header>
     <div class="container">
       <a href="/">← All projects</a>
       <h1>{{ project.name }} <a href="/projects/{{ project.id }}/edit" style="font-size:14px; margin-left:8px;">Edit</a></h1>
@@ -35,6 +44,9 @@
               <a href="/scans/{{ s.id }}">Scan #{{ s.id }}</a>
               <span class="badge" style="margin-left:8px;">{{ s.status }}</span>
               <span class="muted">{{ s.model }}</span>
+              <span class="muted" style="margin-left:8px;">
+                {{ (s.completed_at or s.started_at).strftime('%Y-%m-%d %H:%M:%S') if (s.completed_at or s.started_at) else '-' }}
+              </span>
             </li>
             {% else %}
             <li class="muted">No scans yet.</li>

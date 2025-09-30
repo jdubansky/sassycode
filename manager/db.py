@@ -101,6 +101,30 @@ CREATE TABLE IF NOT EXISTS unique_findings (
             if col not in existing_unique:
                 conn.exec_driver_sql(f"ALTER TABLE unique_findings ADD COLUMN {col} {coltype} NULL")
 
+        # Create schedules tables if not exist
+        conn.exec_driver_sql(
+            """
+CREATE TABLE IF NOT EXISTS schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name VARCHAR(255) NOT NULL,
+    cron VARCHAR(64) NOT NULL,
+    model VARCHAR(255) NOT NULL,
+    deep INTEGER DEFAULT 0,
+    created_at DATETIME,
+    last_run_at DATETIME
+);
+"""
+        )
+        conn.exec_driver_sql(
+            """
+CREATE TABLE IF NOT EXISTS schedule_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    schedule_id INTEGER NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE
+);
+"""
+        )
+
 
 @contextmanager
 def session_scope() -> Generator[Session, None, None]:

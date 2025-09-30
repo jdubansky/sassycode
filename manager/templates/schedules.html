@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>sassycode - schedules</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="header-bar">
+        <div class="brand">sassycode</div>
+        <nav class="nav-links">
+          <a href="/">Projects</a>
+          <a href="/schedules">Schedules</a>
+        </nav>
+      </div>
+    </header>
+    <div class="container">
+      <a href="/">← All projects</a>
+      <h1>Schedules</h1>
+
+      <div class="panel">
+        <h2>Create Schedule</h2>
+        <form class="toolbar" method="post" action="/schedules">
+          <input type="text" name="name" placeholder="Name" required />
+          <input type="text" name="cron" placeholder="Cron (e.g., 0 2 * * 1)" required />
+          <select name="model" required>
+            <option value="gpt-5">gpt-5</option>
+            <option value="gpt-4o">gpt-4o</option>
+            <option value="gpt-4o-mini" selected>gpt-4o-mini</option>
+          </select>
+          <label class="muted" style="display:flex;align-items:center;gap:6px;">
+            <input type="checkbox" name="deep" value="1" /> Deep analysis
+          </label>
+        </form>
+        <div class="toolbar">
+          <label class="muted">Projects:</label>
+          <div>
+            {% for p in projects %}
+              <label style="display:inline-flex;align-items:center;gap:6px;margin-right:8px;">
+                <input type="checkbox" class="sched-proj" value="{{ p.id }}" /> {{ p.name }}
+              </label>
+            {% endfor %}
+          </div>
+          <button class="btn-primary" id="createScheduleBtn">Create</button>
+        </div>
+      </div>
+
+      <h2>Existing Schedules</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Cron</th>
+            <th>Model</th>
+            <th>Deep</th>
+            <th>Projects</th>
+            <th>Last run</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in schedules %}
+          <tr>
+            <td>{{ s.name }}</td>
+            <td><code>{{ s.cron }}</code></td>
+            <td>{{ s.model }}</td>
+            <td>{{ 'yes' if s.deep else 'no' }}</td>
+            <td>
+              {% set names = schedule_projects_map.get(s.id, []) %}
+              {% if names %}
+                {{ ", ".join(names) }}
+              {% else %}
+                <span class="muted">None</span>
+              {% endif %}
+            </td>
+            <td>{{ s.last_run_at or '-' }}</td>
+            <td>
+              <form method="post" action="/schedules/{{ s.id }}/delete" onsubmit="return confirm('Delete schedule {{ s.name }}?');">
+                <button class="btn-danger" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7" class="muted">No schedules yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <script src="/static/app.js"></script>
+    <script>
+      (function(){
+        const btn = document.getElementById('createScheduleBtn');
+        if (!btn) return;
+        btn.addEventListener('click', function(e){
+          const form = document.querySelector('form[action="/schedules"]');
+          const ids = Array.from(document.querySelectorAll('.sched-proj:checked')).map(c=>c.value).join(',');
+          const input = document.createElement('input');
+          input.type = 'hidden';
+          input.name = 'project_ids';
+          input.value = ids;
+          form.appendChild(input);
+          form.submit();
+        });
+      })();
+    </script>
+  </body>
+</html>

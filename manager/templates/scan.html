@@ -6,6 +6,15 @@
     <link rel="stylesheet" href="/static/style.css">
   </head>
   <body>
+    <header class="app-header">
+      <div class="header-bar">
+        <div class="brand">sassycode</div>
+        <nav class="nav-links">
+          <a href="/">Projects</a>
+          <a href="/schedules">Schedules</a>
+        </nav>
+      </div>
+    </header>
     <div class="container">
       <a href="/projects/{{ scan.project.id }}">← Back to project</a>
       <h1>Scan #{{ scan.id }} - <span class="badge" id="status">{{ scan.status }}</span></h1>

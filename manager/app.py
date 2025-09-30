@@ -1,20 +1,23 @@
 import json
+import os
 import subprocess
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Depends, Request, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from croniter import croniter
+import time
 
 from .db import init_db, migrate_db, session_scope, SessionLocal
-from .models import Project, Scan, Finding, ScanLog, UniqueFinding
+from .models import Project, Scan, Finding, ScanLog, UniqueFinding, Schedule, ScheduleProject
 
 
 load_dotenv()
@@ -31,6 +34,8 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 # Track running scan processes
 RUNNING_PROCS: dict[int, subprocess.Popen] = {}
 RUNNING_LOCK = threading.Lock()
+MAX_CONCURRENT_SCANS = int(os.getenv("MAX_CONCURRENT_SCANS", "2"))
+SCAN_SEM = threading.Semaphore(MAX_CONCURRENT_SCANS)
 
 
 def get_db():
@@ -41,16 +46,64 @@ def get_db():
         db.close()
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon_redirect():
+    return RedirectResponse(url="/static/favicon.svg")
+
+
+@app.get("/.well-known/appspecific/com.chrome.devtools.json", include_in_schema=False)
+def chrome_devtools_probe():
+    # Chrome devtools probes this path; return empty JSON instead of 404 noise
+    return JSONResponse(content={})
+
+
 @app.on_event("startup")
 def on_startup():
     init_db()
     migrate_db()
+    # Start scheduler thread
+    t = threading.Thread(target=_scheduler_loop, daemon=True)
+    t.start()
 
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, db: Session = Depends(get_db)):
     projects = db.query(Project).all()
     return templates.TemplateResponse("index.html", {"request": request, "projects": projects})
+@app.get("/schedules", response_class=HTMLResponse)
+def schedules_page(request: Request, db: Session = Depends(get_db)):
+    schedules = db.query(Schedule).all()
+    projects = db.query(Project).all()
+    # Build mapping of schedule_id -> [project names]
+    from sqlalchemy import select
+    schedule_projects_map: dict[int, list[str]] = {}
+    links = db.query(ScheduleProject, Project).join(Project, ScheduleProject.project_id == Project.id).all()
+    for link, proj in links:
+        schedule_projects_map.setdefault(link.schedule_id, []).append(proj.name)
+    return templates.TemplateResponse(
+        "schedules.html",
+        {"request": request, "schedules": schedules, "projects": projects, "schedule_projects_map": schedule_projects_map},
+    )
+
+@app.post("/schedules")
+def create_schedule(name: str = Form(...), cron: str = Form(...), model: str = Form(...), deep: str = Form(None), project_ids: str = Form(""), db: Session = Depends(get_db)):
+    s = Schedule(name=name, cron=cron, model=model, deep=1 if deep else 0)
+    db.add(s)
+    db.flush()
+    ids = [int(x) for x in (project_ids.split(",") if project_ids else []) if x]
+    for pid in ids:
+        db.add(ScheduleProject(schedule_id=s.id, project_id=pid))
+    db.commit()
+    return RedirectResponse(url="/schedules", status_code=303)
+
+
+@app.post("/schedules/{schedule_id}/delete")
+def delete_schedule(schedule_id: int, db: Session = Depends(get_db)):
+    s = db.get(Schedule, schedule_id)
+    if s:
+        db.delete(s)
+        db.commit()
+    return RedirectResponse(url="/schedules", status_code=303)
 
 
 @app.post("/projects")
@@ -126,6 +179,7 @@ def trigger_scan(project_id: int = Form(...), model: str = Form(...), deep: str 
     def run_and_ingest(scan_id: int):
         success = False
         try:
+            SCAN_SEM.acquire()
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -246,6 +300,7 @@ def trigger_scan(project_id: int = Form(...), model: str = Form(...), deep: str 
                             sc.status = "failed"
                     if not sc.completed_at:
                         sc.completed_at = datetime.utcnow()
+            SCAN_SEM.release()
 
     threading.Thread(target=run_and_ingest, args=(scan.id,), daemon=True).start()
 
@@ -277,6 +332,112 @@ def scan_logs_json(scan_id: int, db: Session = Depends(get_db)):
             for l in logs
         ],
     }
+
+
+def _scheduler_loop():
+    while True:
+        try:
+            with session_scope() as session:
+                schedules = session.query(Schedule).all()
+                now = datetime.utcnow()
+                for s in schedules:
+                    base = s.last_run_at or (now - timedelta(minutes=1))
+                    itr = croniter(s.cron, base)
+                    next_time = itr.get_next(datetime)
+                    if next_time <= now:
+                        # mark last_run
+                        s.last_run_at = now
+                        session.flush()
+                        # queue scans for selected projects
+                        proj_links = session.query(ScheduleProject).filter(ScheduleProject.schedule_id == s.id).all()
+                        for link in proj_links:
+                            p = session.get(Project, link.project_id)
+                            if not p:
+                                continue
+                            # trigger scan similar to POST /scans
+                            scan = Scan(project_id=p.id, model=s.model, status="running", started_at=datetime.utcnow())
+                            session.add(scan)
+                            session.flush()
+                            # seed startup log
+                            session.add(ScanLog(scan_id=scan.id, level="INFO", message=f"Scheduled run: {s.name}"))
+                            # Build command
+                            cmd = [
+                                sys.executable,
+                                "-m",
+                                "scanner.cli",
+                                "scan",
+                                "--path",
+                                p.path,
+                                "--model",
+                                s.model,
+                                "--verbose",
+                            ]
+                            if s.deep:
+                                cmd.append("--deep")
+
+                            def run_and_ingest_bg(scan_id: int, cmd_list: list[str]):
+                                # Reuse logic from trigger_scan
+                                success = False
+                                try:
+                                    SCAN_SEM.acquire()
+                                    proc = subprocess.Popen(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+                                    with RUNNING_LOCK:
+                                        RUNNING_PROCS[scan_id] = proc
+                                    stdout_chunks: list[str] = []
+                                    assert proc.stderr is not None
+                                    for line in proc.stderr:
+                                        msg = line.rstrip("\n")
+                                        with session_scope() as s2:
+                                            s2.add(ScanLog(scan_id=scan_id, level="INFO", message=msg))
+                                    if proc.stdout:
+                                        stdout_chunks.append(proc.stdout.read() or "")
+                                    proc.wait()
+                                    stdout = "".join(stdout_chunks).strip()
+                                    obj = json.loads(stdout) if stdout else {}
+                                    findings = obj.get("findings", [])
+                                    with session_scope() as s3:
+                                        for f in findings:
+                                            # upsert unique (simplified: call existing path by reusing code is complex here)
+                                            fp_parts = [
+                                                (f.get("file_path") or "").strip().lower(),
+                                                ",".join(f.get("cwe", []) or []) if isinstance(f.get("cwe"), list) else (f.get("cwe") or ""),
+                                                (f.get("function_name") or "").strip().lower(),
+                                                (f.get("entrypoint") or "").strip().lower(),
+                                            ]
+                                            fingerprint = "|".join(fp_parts)
+                                            uf = s3.query(UniqueFinding).filter(UniqueFinding.project_id == p.id, UniqueFinding.fingerprint == fingerprint).one_or_none()
+                                            if uf is None:
+                                                uf = UniqueFinding(project_id=p.id, fingerprint=fingerprint, file_path=f.get("file_path", ""), cwe=",".join(f.get("cwe", []) or []) or None, function_name=f.get("function_name"), entrypoint=f.get("entrypoint"), last_line=f.get("line"), last_severity=f.get("severity"), last_description=f.get("description"), severity=f.get("severity"), description=f.get("description"))
+                                                s3.add(uf)
+                                                s3.flush()
+                                            else:
+                                                uf.last_seen_at = datetime.utcnow()
+                                                uf.occurrences = (uf.occurrences or 0) + 1
+                                                uf.last_line = f.get("line")
+                                                uf.last_severity = f.get("severity")
+                                                uf.last_description = f.get("description")
+                                            s3.add(Finding(scan_id=scan_id, unique_finding_id=uf.id, file_path=f.get("file_path", ""), severity=f.get("severity", "LOW"), line=f.get("line"), rule_id=f.get("rule_id"), cwe=",".join(f.get("cwe", []) or []) or None, description=f.get("description", ""), recommendation=f.get("recommendation"), confidence=f.get("confidence"), function_name=f.get("function_name"), entrypoint=f.get("entrypoint"), arguments=",".join(f.get("arguments", []) or []) or None, root_cause=f.get("root_cause"), details_json=json.dumps(f.get("details")) if f.get("details") else None))
+                                        scx = s3.get(Scan, scan_id)
+                                        if scx:
+                                            scx.status = "completed"
+                                            scx.completed_at = datetime.utcnow()
+                                    success = True
+                                except Exception:
+                                    with session_scope() as s4:
+                                        scx = s4.get(Scan, scan_id)
+                                        if scx:
+                                            scx.status = "failed"
+                                            scx.completed_at = datetime.utcnow()
+                                finally:
+                                    with RUNNING_LOCK:
+                                        RUNNING_PROCS.pop(scan_id, None)
+                                    SCAN_SEM.release()
+
+                            print(f"[scheduler] triggered {s.name} for project {p.name} (scan #{scan.id})")
+                            threading.Thread(target=run_and_ingest_bg, args=(scan.id, cmd), daemon=True).start()
+        except Exception as e:
+            print(f"[scheduler] error: {e}")
+        time.sleep(30)
 
 
 @app.post("/scans/{scan_id}/cancel")

@@ -80,3 +80,11 @@ pre { background: var(--code-bg); color: inherit; padding:12px; border-radius:12
 .scroll-panel { max-height: 360px; overflow: auto; }
 .panel h2 { margin-top: 0; }
 
+/* Header */
+.app-header { position: sticky; top: 0; z-index: 50; background: var(--panel); border-bottom: 1px solid var(--border); }
+.header-bar { display: flex; align-items: center; justify-content: space-between; padding: 10px 20px; }
+.brand { font-weight: 700; letter-spacing: -0.02em; }
+.nav-links { display: flex; gap: 14px; align-items: center; }
+.nav-links a { color: var(--text); opacity: 0.8; }
+.nav-links a:hover { opacity: 1; }
+

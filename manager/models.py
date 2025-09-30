@@ -80,6 +80,30 @@ class UniqueFinding(Base):
     )
 
 
+class Schedule(Base):
+    __tablename__ = "schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255))
+    cron: Mapped[str] = mapped_column(String(64))  # cron expression
+    model: Mapped[str] = mapped_column(String(255), default="gpt-4o-mini")
+    deep: Mapped[bool] = mapped_column(Integer, default=0)  # 0/1
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    projects: Mapped[list["ScheduleProject"]] = relationship(back_populates="schedule", cascade="all, delete-orphan")
+
+
+class ScheduleProject(Base):
+    __tablename__ = "schedule_projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    schedule_id: Mapped[int] = mapped_column(ForeignKey("schedules.id", ondelete="CASCADE"))
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+
+    schedule: Mapped[Schedule] = relationship(back_populates="projects")
+
+
 class ScanLog(Base):
     __tablename__ = "scan_logs"
 

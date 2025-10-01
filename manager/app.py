@@ -134,12 +134,13 @@ def edit_project(project_id: int, request: Request, db: Session = Depends(get_db
 
 
 @app.post("/projects/{project_id}")
-def update_project(project_id: int, name: str = Form(...), path: str = Form(...), db: Session = Depends(get_db)):
+def update_project(project_id: int, name: str = Form(...), path: str = Form(...), ignore_globs: str = Form(""), db: Session = Depends(get_db)):
     project = db.get(Project, project_id)
     if not project:
         return RedirectResponse(url="/", status_code=303)
     project.name = name
     project.path = path
+    project.ignore_globs = ignore_globs or None
     db.add(project)
     db.commit()
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
@@ -171,6 +172,8 @@ def trigger_scan(project_id: int = Form(...), model: str = Form(...), deep: str 
     ]
     if deep:
         cmd.append("--deep")
+    if project.ignore_globs:
+        cmd += ["--ignore", project.ignore_globs]
 
     # seed a startup log so UI shows activity immediately
     with session_scope() as session:
@@ -374,6 +377,9 @@ def _scheduler_loop():
                             ]
                             if s.deep:
                                 cmd.append("--deep")
+                            # attach ignore globs from project if present
+                            if p.ignore_globs:
+                                cmd += ["--ignore", p.ignore_globs]
 
                             def run_and_ingest_bg(scan_id: int, cmd_list: list[str]):
                                 # Reuse logic from trigger_scan
@@ -438,6 +444,40 @@ def _scheduler_loop():
         except Exception as e:
             print(f"[scheduler] error: {e}")
         time.sleep(30)
+
+
+@app.get("/unique_findings/{uf_id}/details.json")
+def unique_finding_details(uf_id: int, db: Session = Depends(get_db)):
+    uf = db.get(UniqueFinding, uf_id)
+    if not uf:
+        return JSONResponse(status_code=404, content={"error": "not_found"})
+    # Get latest finding with details for this unique finding
+    latest = (
+        db.query(Finding)
+        .filter(Finding.unique_finding_id == uf_id, Finding.details_json.isnot(None))
+        .order_by(Finding.id.desc())
+        .first()
+    )
+    details = None
+    if latest and latest.details_json:
+        try:
+            details = json.loads(latest.details_json)
+        except Exception:
+            details = None
+    return {
+        "unique": {
+            "id": uf.id,
+            "severity": uf.severity or uf.last_severity,
+            "description": uf.description or uf.last_description,
+            "file_path": uf.file_path,
+            "cwe": uf.cwe,
+            "function_name": uf.function_name,
+            "entrypoint": uf.entrypoint,
+            "occurrences": uf.occurrences,
+            "last_seen_at": uf.last_seen_at.isoformat() if uf.last_seen_at else None,
+        },
+        "details": details,
+    }
 
 
 @app.post("/scans/{scan_id}/cancel")

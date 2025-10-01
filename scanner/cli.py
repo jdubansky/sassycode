@@ -5,7 +5,7 @@ import sys
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Iterable, List, Optional, Dict, Any
+from typing import Iterable, List, Optional, Dict, Any, Set
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -42,7 +42,25 @@ class Finding:
     details: Optional[Dict[str, Any]] = None
 
 
-def iter_files(base_path: Path) -> Iterable[Path]:
+def build_ignored(base_path: Path, ignore_patterns: Optional[List[str]]) -> Set[Path]:
+    ignored: Set[Path] = set()
+    if not ignore_patterns:
+        return ignored
+    # Resolve patterns relative to base_path
+    for pattern in ignore_patterns:
+        pattern = pattern.strip()
+        if not pattern:
+            continue
+        for p in base_path.glob(pattern):
+            try:
+                ignored.add(p.resolve())
+            except Exception:
+                ignored.add(p)
+    return ignored
+
+
+def iter_files(base_path: Path, ignore_patterns: Optional[List[str]] = None) -> Iterable[Path]:
+    ignored = build_ignored(base_path, ignore_patterns)
     for root, dirs, files in os.walk(base_path):
         # Skip configured dir names and hidden dirs
         dirs[:] = [
@@ -53,6 +71,13 @@ def iter_files(base_path: Path) -> Iterable[Path]:
             if f.startswith('.'):
                 continue
             p = Path(root) / f
+            resolved = None
+            try:
+                resolved = p.resolve()
+            except Exception:
+                resolved = p
+            if resolved in ignored:
+                continue
             if p.suffix.lower() in SUPPORTED_EXTENSIONS:
                 yield p
 
@@ -196,12 +221,12 @@ Provide expanded details as a JSON object matching the specified keys.
 
 
 
-def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: float = 0.0, verbose: bool = False, deep: bool = False, deep_limit: int = 10) -> dict:
+def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: float = 0.0, verbose: bool = False, deep: bool = False, deep_limit: int = 10, ignore: Optional[List[str]] = None) -> dict:
     load_dotenv()
     client = OpenAI()
 
     all_findings: List[Finding] = []
-    files_iter = list(iter_files(path)) if verbose else iter_files(path)
+    files_iter = list(iter_files(path, ignore_patterns=ignore)) if verbose else iter_files(path, ignore_patterns=ignore)
     if verbose and isinstance(files_iter, list):
         sys.stderr.write(f"[scanner] Starting scan of {len(files_iter)} files in {path}\n")
         sys.stderr.flush()
@@ -242,6 +267,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_scan.add_argument("--verbose", action="store_true", help="Log progress to stderr")
     p_scan.add_argument("--deep", action="store_true", help="Request richer per-finding details")
     p_scan.add_argument("--deep-limit", type=int, default=10, help="Max findings per file to expand")
+    p_scan.add_argument("--ignore", help="Comma-separated glob patterns to ignore (relative to path)")
 
     args = parser.parse_args(argv)
 
@@ -250,7 +276,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not target.exists():
             print(json.dumps({"error": f"path does not exist: {target}"}))
             return 2
-        result = run_scan(target, args.model, args.max_bytes, args.temperature, args.verbose, args.deep, args.deep_limit)
+        ignore = [s.strip() for s in (args.ignore.split(',') if args.ignore else []) if s.strip()]
+        result = run_scan(target, args.model, args.max_bytes, args.temperature, args.verbose, args.deep, args.deep_limit, ignore)
         print(json.dumps(result, indent=2))
         return 0
 

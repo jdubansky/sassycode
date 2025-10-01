@@ -19,6 +19,10 @@
             <label>Path</label><br>
             <input type="text" name="path" value="{{ project.path }}" required />
           </div>
+          <div style="margin-bottom:8px;">
+            <label>Ignore patterns (comma-separated globs)</label><br>
+            <input type="text" name="ignore_globs" value="{{ project.ignore_globs or '' }}" placeholder="e.g., **/tests/**, **/.cache/**, *.md" />
+          </div>
           <button class="btn-primary" type="submit">Save</button>
         </form>
       </div>

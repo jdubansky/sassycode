@@ -87,7 +87,15 @@
       </div>
       {% set uniques = db.query(models.UniqueFinding).filter(models.UniqueFinding.project_id == project.id).order_by(models.UniqueFinding.last_seen_at.desc()).all() %}
       {% if uniques %}
-      <table id="uniqTable">
+      <table id="uniqTable" class="uniq-table">
+        <colgroup>
+          <col class="sev-col" />
+          <col />
+          <col class="func-col" />
+          <col class="entry-col" />
+          <col class="file-col" />
+          <col class="btn-col" />
+        </colgroup>
         <thead>
           <tr>
             <th>Severity</th>

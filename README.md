@@ -1,5 +1,9 @@
 # sassycode
 
+<div align="center">
+  <img src="./sassycode.gif" alt="sassycode demo" width="900" />
+</div>
+
 Two-part Python project:
 
 - Scanner CLI: runs standalone SAST scans on a folder and prints JSON findings

@@ -1,7 +1,18 @@
 # sassycode
 
 <div align="center">
-  <img src="./sassycode.gif" alt="sassycode demo" width="900" />
+  <img src="./Sassycode1.png" alt="sassycode screenshot 1" width="48%" />
+  <img src="./Sassycode2.png" alt="sassycode screenshot 2" width="48%" />
+  <br/>
+  <img src="./Sassycode3.png" alt="sassycode screenshot 3" width="48%" />
+  <img src="./Sassycode4.png" alt="sassycode screenshot 4" width="48%" />
+  <br/>
+  <em>Overview, scan triggering, findings, and details</em>
+  <br/>
+  <br/>
+  <hr/>
+  <br/>
+  
 </div>
 
 Two-part Python project:
@@ -51,10 +62,11 @@ python /Users/jeremydubansky/dev/sassycode/scanner/cli.py scan --path "/Users/je
 sassycode-manager --reload
 ```
 
-Open http://localhost:8008 to use the UI (default port can be overridden with `--port` or `PORT`).
+Open http://localhost:3000 to use the UI (default port can be overridden with `--port` or `PORT`).
 
 ## Notes
 
 - Requires Python 3.11+
 - Uses SQLite by default; see `DATABASE_URL` in `.env`
 - OpenAI key required: set `OPENAI_API_KEY`
+ - Some models (e.g., `gpt-5`) enforce a fixed temperature. The scanner automatically omits the `temperature` param for these to avoid errors.

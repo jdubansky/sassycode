@@ -18,7 +18,7 @@
     <div class="container">
       <a href="/">← All projects</a>
       <h1>{{ project.name }}</h1>
-      <div class="panel" style="margin-bottom:16px;">
+      <div class="panel" style="margin-bottom:16px; position: relative;">
         <h2>Project settings</h2>
         <form method="post" action="/projects/{{ project.id }}">
           <div style="margin-bottom:8px;">
@@ -35,6 +35,9 @@
           </div>
           <button class="btn-primary" type="submit">Save</button>
         </form>
+        <form method="post" action="/projects/{{ project.id }}/delete" onsubmit="return confirm('Delete project {{ project.name }}? This will remove all scans and findings.');" style="position:absolute; right:16px; top:16px;">
+          <button class="btn-danger" type="submit">Delete</button>
+        </form>
       </div>
 
       <div class="grid-split">
@@ -47,6 +50,7 @@
               <option value="gpt-4o">gpt-4o</option>
               <option value="gpt-4o-mini" selected>gpt-4o-mini</option>
             </select>
+            <span class="muted">Some models (e.g., gpt-5) use a fixed temperature.</span>
             <label class="muted" style="display:flex;align-items:center;gap:6px;">
               <input type="checkbox" name="deep" value="1" /> Deep analysis
             </label>
@@ -93,6 +97,7 @@
           <col />
           <col class="func-col" />
           <col class="entry-col" />
+          <col class="status-col" />
           <col class="file-col" />
           <col class="btn-col" />
         </colgroup>
@@ -103,6 +108,7 @@
             
             <th>Function</th>
             <th>Entrypoint</th>
+            <th>Status</th>
             <th>File</th>
             <th></th>
           </tr>
@@ -114,6 +120,7 @@
             <td>{{ u.description or u.last_description or '-' }}</td>
             <td><code>{{ u.function_name or '-' }}</code></td>
             <td><code>{{ u.entrypoint or '-' }}</code></td>
+            <td>{{ u.status or 'open' }}</td>
             <td><code class="wrap-code">{{ u.file_path }}</code></td>
             <td><button class="btn-primary" data-see-more="{{ u.id }}">See more</button></td>
           </tr>

@@ -105,11 +105,28 @@ document.addEventListener('click', function(e) {
           <strong>Occurrences:</strong> ${data.unique.occurrences || 1} •
           <strong>Last seen:</strong> ${data.unique.last_seen_at || '-'}
         </div>
+        <form method="post" action="/unique_findings/${ufId}/status" class="toolbar" style="margin:8px 0;">
+          <label class="muted">Status</label>
+          <select name="status">
+            <option value="open" ${data.unique.status==='open'?'selected':''}>Open</option>
+            <option value="triaging" ${data.unique.status==='triaging'?'selected':''}>Triaging</option>
+            <option value="false_positive" ${data.unique.status==='false_positive'?'selected':''}>False Positive</option>
+            <option value="fixed" ${data.unique.status==='fixed'?'selected':''}>Fixed</option>
+          </select>
+          <button class="btn-primary" type="submit">Update</button>
+          <span style="flex:1"></span>
+          <button class="btn-danger" formmethod="post" formaction="/unique_findings/${ufId}/delete" type="submit" onclick="return confirm('Delete this unique finding?');">Delete</button>
+        </form>
         ${d.explanation ? `<div><strong>Explanation:</strong> ${d.explanation}</div>` : ''}
         ${d.impact ? `<div><strong>Impact:</strong> ${d.impact}</div>` : ''}
+        ${data.finding && data.finding.root_cause ? `<div><strong>Root cause:</strong> ${data.finding.root_cause}</div>` : ''}
+        ${data.finding && data.finding.recommendation ? `<div><strong>Remediation:</strong> ${data.finding.recommendation}</div>` : ''}
+        ${data.finding && data.finding.function_name ? `<div><strong>Function:</strong> <code>${data.finding.function_name}</code></div>` : ''}
+        ${data.finding && data.finding.entrypoint ? `<div><strong>Entrypoint:</strong> <code>${data.finding.entrypoint}</code></div>` : ''}
+        ${data.finding && data.finding.arguments ? `<div><strong>Arguments:</strong> ${data.finding.arguments}</div>` : ''}
         ${d.fix_suggestion ? `<div><strong>Fix suggestion:</strong> ${d.fix_suggestion}</div>` : ''}
-        ${Array.isArray(d.references) && d.references.length ? `<div><strong>References:</strong> ${d.references.map(r=>`<a href="${r}" target="_blank" rel="noreferrer">${r}</a>`).join(', ')}</div>` : ''}
-        ${d.evidence && d.evidence.snippet ? `<div style="margin-top:8px;"><strong>Evidence (lines ${d.evidence.start_line||''}-${d.evidence.end_line||''}):</strong><pre>${d.evidence.snippet}</pre></div>` : ''}
+        ${Array.isArray(d.references) && d.references.length ? `<div><strong>References:</strong> ${d.references.map(r=>`<a href=\"${r}\" target=\"_blank\" rel=\"noreferrer\">${r}</a>`).join(', ')}</div>` : ''}
+        ${d.evidence && d.evidence.snippet ? `<div style=\"margin-top:8px;\"><strong>Evidence (lines ${d.evidence.start_line||''}-${d.evidence.end_line||''}):</strong><pre>${d.evidence.snippet}</pre></div>` : ''}
       </div>
     `;
     wrap.appendChild(td);

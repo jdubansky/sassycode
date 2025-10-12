@@ -16,6 +16,14 @@ SUPPORTED_EXTENSIONS = {
     ".cpp", ".c", ".h", ".hpp", ".rs", ".kt", ".swift", ".sh", ".yml", ".yaml", ".json",
 }
 
+# Models that reject non-default temperature (omit temperature for these)
+FIXED_TEMP_MODELS = ("gpt-5",)
+
+
+def is_fixed_temperature_model(model: str) -> bool:
+    m = (model or "").lower()
+    return any(m.startswith(x) for x in FIXED_TEMP_MODELS)
+
 # Directory names to skip anywhere in the tree (case-insensitive by name)
 SKIP_DIR_NAMES = {
     ".git", "node_modules", ".venv", "venv", "dist", "build",
@@ -113,15 +121,17 @@ Provide findings as a JSON object matching the specified schema.
 """
 
     try:
-        resp = client.chat.completions.create(
-            model=model,
-            temperature=temperature,
-            response_format={"type": "json_object"},
-            messages=[
+        params: Dict[str, Any] = {
+            "model": model,
+            "response_format": {"type": "json_object"},
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-        )
+        }
+        if not is_fixed_temperature_model(model):
+            params["temperature"] = temperature
+        resp = client.chat.completions.create(**params)
         text = resp.choices[0].message.content or "{}"
         obj = json.loads(text)
         raw_findings = obj.get("findings", [])
@@ -189,16 +199,18 @@ Code context (may be partial):
 Provide expanded details as a JSON object matching the specified keys.
 """
     try:
-        resp = client.chat.completions.create(
-            model=model,
-            temperature=temperature,
-            response_format={"type": "json_object"},
-            messages=[
+        params: Dict[str, Any] = {
+            "model": model,
+            "response_format": {"type": "json_object"},
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=1200,
-        )
+            "max_tokens": 1200,
+        }
+        if not is_fixed_temperature_model(model):
+            params["temperature"] = temperature
+        resp = client.chat.completions.create(**params)
         text = resp.choices[0].message.content or "{}"
         obj = json.loads(text)
         evidence = obj.get("evidence") or {}
@@ -226,6 +238,9 @@ def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: floa
     client = OpenAI()
 
     all_findings: List[Finding] = []
+    if verbose and is_fixed_temperature_model(model):
+        sys.stderr.write("[scanner] Model enforces fixed temperature; ignoring custom temperature setting\n")
+        sys.stderr.flush()
     files_iter = list(iter_files(path, ignore_patterns=ignore)) if verbose else iter_files(path, ignore_patterns=ignore)
     if verbose and isinstance(files_iter, list):
         sys.stderr.write(f"[scanner] Starting scan of {len(files_iter)} files in {path}\n")

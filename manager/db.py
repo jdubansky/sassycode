@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS unique_findings (
         for col, coltype in [
             ("severity", "VARCHAR(16)"),
             ("description", "TEXT"),
+            ("status", "VARCHAR(24)"),
         ]:
             if col not in existing_unique:
                 conn.exec_driver_sql(f"ALTER TABLE unique_findings ADD COLUMN {col} {coltype} NULL")

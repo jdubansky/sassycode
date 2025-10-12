@@ -146,6 +146,15 @@ def update_project(project_id: int, name: str = Form(...), path: str = Form(...)
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
 
 
+@app.post("/projects/{project_id}/delete")
+def delete_project(project_id: int, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if project:
+        db.delete(project)
+        db.commit()
+    return RedirectResponse(url="/", status_code=303)
+
+
 @app.post("/scans")
 def trigger_scan(project_id: int = Form(...), model: str = Form(...), deep: str = Form(None), db: Session = Depends(get_db)):
     project = db.get(Project, project_id)
@@ -451,17 +460,24 @@ def unique_finding_details(uf_id: int, db: Session = Depends(get_db)):
     uf = db.get(UniqueFinding, uf_id)
     if not uf:
         return JSONResponse(status_code=404, content={"error": "not_found"})
-    # Get latest finding with details for this unique finding
-    latest = (
+    # Latest finding (any) for base fields
+    latest_any = (
+        db.query(Finding)
+        .filter(Finding.unique_finding_id == uf_id)
+        .order_by(Finding.id.desc())
+        .first()
+    )
+    # Latest finding that has deep details
+    latest_with_details = (
         db.query(Finding)
         .filter(Finding.unique_finding_id == uf_id, Finding.details_json.isnot(None))
         .order_by(Finding.id.desc())
         .first()
     )
     details = None
-    if latest and latest.details_json:
+    if latest_with_details and latest_with_details.details_json:
         try:
-            details = json.loads(latest.details_json)
+            details = json.loads(latest_with_details.details_json)
         except Exception:
             details = None
     return {
@@ -475,9 +491,41 @@ def unique_finding_details(uf_id: int, db: Session = Depends(get_db)):
             "entrypoint": uf.entrypoint,
             "occurrences": uf.occurrences,
             "last_seen_at": uf.last_seen_at.isoformat() if uf.last_seen_at else None,
+            "status": uf.status,
         },
+        "finding": {
+            "recommendation": getattr(latest_any, "recommendation", None),
+            "function_name": getattr(latest_any, "function_name", None),
+            "entrypoint": getattr(latest_any, "entrypoint", None),
+            "arguments": getattr(latest_any, "arguments", None),
+            "root_cause": getattr(latest_any, "root_cause", None),
+            "line": getattr(latest_any, "line", None),
+        } if latest_any else None,
         "details": details,
     }
+
+
+@app.post("/unique_findings/{uf_id}/status")
+def set_unique_finding_status(uf_id: int, status: str = Form(...), db: Session = Depends(get_db)):
+    uf = db.get(UniqueFinding, uf_id)
+    if uf:
+        uf.status = status
+        db.add(uf)
+        db.commit()
+    # Redirect back to the project page
+    # Find a related project id
+    pid = uf.project_id if uf else None
+    return RedirectResponse(url=f"/projects/{pid}" if pid else "/", status_code=303)
+
+
+@app.post("/unique_findings/{uf_id}/delete")
+def delete_unique_finding(uf_id: int, db: Session = Depends(get_db)):
+    uf = db.get(UniqueFinding, uf_id)
+    pid = uf.project_id if uf else None
+    if uf:
+        db.delete(uf)
+        db.commit()
+    return RedirectResponse(url=f"/projects/{pid}" if pid else "/", status_code=303)
 
 
 @app.post("/scans/{scan_id}/cancel")

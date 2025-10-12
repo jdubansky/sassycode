@@ -75,6 +75,7 @@ class UniqueFinding(Base):
     # Canonical/representative values
     severity: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)  # e.g., open, triaging, false_positive, fixed
 
     __table_args__ = (
         UniqueConstraint("project_id", "fingerprint", name="uq_unique_finding_fingerprint"),

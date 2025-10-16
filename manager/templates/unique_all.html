@@ -1,0 +1,96 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>sassycode - all unique findings</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="header-bar">
+        <div class="brand">sassycode</div>
+        <nav class="nav-links">
+          <a href="/">Projects</a>
+          <a href="/schedules">Schedules</a>
+          <a href="/unique">All Findings</a>
+        </nav>
+      </div>
+    </header>
+    <div class="container">
+      <a href="/">← All projects</a>
+      <h1>All Unique Findings</h1>
+
+      <form class="toolbar" method="get" action="/unique">
+        <input type="search" name="q" placeholder="Search findings..." value="{{ q }}" />
+        <select name="sort">
+          <option value="last_seen_desc" {% if sort=='last_seen_desc' %}selected{% endif %}>Sort: Last seen (newest)</option>
+          <option value="last_seen_asc" {% if sort=='last_seen_asc' %}selected{% endif %}>Sort: Last seen (oldest)</option>
+          <option value="severity_desc" {% if sort=='severity_desc' %}selected{% endif %}>Sort: Severity (high→low)</option>
+          <option value="severity_asc" {% if sort=='severity_asc' %}selected{% endif %}>Sort: Severity (low→high)</option>
+          <option value="occ_desc" {% if sort=='occ_desc' %}selected{% endif %}>Sort: Occurrences (high→low)</option>
+          <option value="occ_asc" {% if sort=='occ_asc' %}selected{% endif %}>Sort: Occurrences (low→high)</option>
+          <option value="project_asc" {% if sort=='project_asc' %}selected{% endif %}>Sort: Project (A→Z)</option>
+          <option value="file_asc" {% if sort=='file_asc' %}selected{% endif %}>Sort: File (A→Z)</option>
+        </select>
+        <input type="hidden" name="page" value="1" />
+        <button class="btn-primary" type="submit">Apply</button>
+        <span class="muted" style="margin-left:auto;">{{ total }} results</span>
+      </form>
+
+      <table class="uniq-table">
+        <colgroup>
+          <col class="sev-col" />
+          <col />
+          <col class="func-col" />
+          <col class="status-col" />
+          <col class="file-col" />
+          <col class="btn-col" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Severity</th>
+            <th>Description</th>
+            <th>Function / Entrypoint</th>
+            <th>Status</th>
+            <th>File</th>
+            <th>Project</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u, p in items %}
+          <tr>
+            <td><span class="badge sev-{{ u.severity or u.last_severity or 'LOW' }}">{{ u.severity or u.last_severity or 'LOW' }}</span></td>
+            <td>{{ u.description or u.last_description or '-' }}</td>
+            <td>
+              <div>
+                <code>{{ u.function_name or '-' }}</code><br/>
+                <code>{{ u.entrypoint or '-' }}</code>
+              </div>
+            </td>
+            <td>{{ u.status or 'open' }}</td>
+            <td><code class="wrap-code">{{ u.file_path }}</code></td>
+            <td><a href="/projects/{{ p.id }}">{{ p.name }}</a></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="muted">No results.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      {% if pages > 1 %}
+      <div class="toolbar" style="justify-content:center;">
+        {% for i in range(1, pages+1) %}
+          {% if i == page %}
+            <span class="badge">{{ i }}</span>
+          {% else %}
+            <a class="badge" href="/unique?q={{ q }}&sort={{ sort }}&page={{ i }}&page_size={{ page_size }}">{{ i }}</a>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+  </html>
+
+

@@ -5,7 +5,9 @@ import sys
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Iterable, List, Optional, Dict, Any, Set
+from typing import Iterable, List, Optional, Dict, Any, Set, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time as _time
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -23,6 +25,22 @@ FIXED_TEMP_MODELS = ("gpt-5",)
 def is_fixed_temperature_model(model: str) -> bool:
     m = (model or "").lower()
     return any(m.startswith(x) for x in FIXED_TEMP_MODELS)
+
+_CONCURRENCY = 4
+
+
+def _chat_with_retry(client: OpenAI, params: Dict[str, Any], max_attempts: int = 4) -> Any:
+    delay = 0.75
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return client.chat.completions.create(**params)
+        except Exception as e:
+            msg = str(e)
+            retriable = any(code in msg for code in ["429", "timeout", "Temporary failure", "rate limit", "503", "502"]) or hasattr(e, "status_code") and getattr(e, "status_code") in (429, 500, 502, 503)
+            if attempt == max_attempts or not retriable:
+                raise
+            _time.sleep(delay)
+            delay *= 1.7
 
 # Directory names to skip anywhere in the tree (case-insensitive by name)
 SKIP_DIR_NAMES = {
@@ -69,12 +87,30 @@ def build_ignored(base_path: Path, ignore_patterns: Optional[List[str]]) -> Set[
 
 def iter_files(base_path: Path, ignore_patterns: Optional[List[str]] = None) -> Iterable[Path]:
     ignored = build_ignored(base_path, ignore_patterns)
+    ignored_dirs = [p for p in ignored if p.exists() and p.is_dir()]
     for root, dirs, files in os.walk(base_path):
         # Skip configured dir names and hidden dirs
-        dirs[:] = [
-            d for d in dirs
-            if d.lower() not in SKIP_DIR_NAMES and not d.startswith(".")
-        ]
+        pruned_dirs = []
+        for d in dirs:
+            if d.lower() in SKIP_DIR_NAMES or d.startswith("."):
+                continue
+            dpath = (Path(root) / d)
+            try:
+                dres = dpath.resolve()
+            except Exception:
+                dres = dpath
+            # If this directory is under any ignored dir, prune it entirely
+            skip = False
+            for idp in ignored_dirs:
+                try:
+                    dres.relative_to(idp)
+                    skip = True
+                    break
+                except Exception:
+                    continue
+            if not skip:
+                pruned_dirs.append(d)
+        dirs[:] = pruned_dirs
         for f in files:
             if f.startswith('.'):
                 continue
@@ -84,10 +120,158 @@ def iter_files(base_path: Path, ignore_patterns: Optional[List[str]] = None) -> 
                 resolved = p.resolve()
             except Exception:
                 resolved = p
+            # Skip if file itself is ignored or it is under an ignored directory
             if resolved in ignored:
+                continue
+            skip_by_dir = False
+            for idp in ignored_dirs:
+                try:
+                    resolved.relative_to(idp)
+                    skip_by_dir = True
+                    break
+                except Exception:
+                    continue
+            if skip_by_dir:
                 continue
             if p.suffix.lower() in SUPPORTED_EXTENSIONS:
                 yield p
+
+
+def _parse_imports_for_python(text: str) -> List[str]:
+    # Very lightweight parsing; handles lines like: import pkg.mod as x  OR  from pkg.mod import Foo
+    imports: List[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("import "):
+            parts = line.split()
+            # import a.b.c, d.e → take first token after import
+            if len(parts) >= 2:
+                target = parts[1].split(",")[0].strip()
+                imports.append(target)
+        elif line.startswith("from "):
+            parts = line.split()
+            if len(parts) >= 2:
+                imports.append(parts[1])
+    return imports
+
+
+def _parse_imports_for_js(text: str) -> List[str]:
+    imports: List[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        # import ... from '...'
+        if line.startswith("import ") and " from " in line and ("'" in line or '"' in line):
+            quote = "'" if "'" in line else '"'
+            try:
+                target = line.split(" from ")[-1].split(quote)[1]
+                imports.append(target)
+            except Exception:
+                pass
+        # const x = require('...')
+        if "require(" in line:
+            try:
+                start = line.index("require(") + 8
+                segment = line[start:]
+                quote = "'" if "'" in segment else '"'
+                target = segment.split(quote)[1]
+                imports.append(target)
+            except Exception:
+                pass
+    return imports
+
+
+def build_import_graph(base_path: Path, files: List[Path]) -> Dict[Path, Set[Path]]:
+    """Build a simple import graph among project files.
+    Only inspects .py, .js, .ts, .jsx, .tsx and resolves local relative imports for JS/TS.
+    For Python, attempts to map module paths to files within base_path.
+    """
+    file_set: Set[Path] = {p.resolve() for p in files}
+    graph: Dict[Path, Set[Path]] = {p.resolve(): set() for p in files}
+
+    js_like = {".js", ".ts", ".jsx", ".tsx"}
+
+    # Precompute module name to path candidates for python (best-effort)
+    module_to_path: Dict[str, Path] = {}
+    for p in files:
+        if p.suffix == ".py":
+            rel = p.relative_to(base_path)
+            mod = ".".join(rel.with_suffix("").parts)
+            module_to_path[mod] = p
+
+    def resolve_py_module(mod: str) -> Optional[Path]:
+        # Try exact match, then without trailing .__init__
+        if mod in module_to_path:
+            return module_to_path[mod]
+        if mod.endswith(".__init__"):
+            m2 = mod.rsplit(".__init__", 1)[0]
+            return module_to_path.get(m2)
+        # Try progressively trimming
+        parts = mod.split(".")
+        while parts:
+            candidate = base_path.joinpath(*parts).with_suffix(".py")
+            if candidate.exists():
+                return candidate
+            pkg = base_path.joinpath(*parts, "__init__.py")
+            if pkg.exists():
+                return pkg
+            parts = parts[:-1]
+        return None
+
+    for p in files:
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        neighbors: Set[Path] = set()
+        if p.suffix == ".py":
+            for mod in _parse_imports_for_python(text):
+                resolved = resolve_py_module(mod)
+                if resolved and resolved.resolve() in file_set and resolved.resolve() != p.resolve():
+                    neighbors.add(resolved.resolve())
+        elif p.suffix in js_like:
+            for target in _parse_imports_for_js(text):
+                if target.startswith("./") or target.startswith("../"):
+                    abs_target = (p.parent / target)
+                    # try with extensions
+                    candidates = [abs_target]
+                    for ext in ["", ".js", ".ts", ".jsx", ".tsx"]:
+                        candidates.append(abs_target.with_suffix(ext))
+                    for c in candidates:
+                        try:
+                            rc = c.resolve()
+                            if rc in file_set and rc != p.resolve():
+                                neighbors.add(rc)
+                                break
+                        except Exception:
+                            continue
+        if neighbors:
+            graph[p.resolve()].update(neighbors)
+            # Add reverse edges for undirected neighborhood traversal
+            for n in neighbors:
+                graph.setdefault(n, set()).add(p.resolve())
+    return graph
+
+
+def related_files_for(file_path: Path, graph: Dict[Path, Set[Path]], depth: int, limit: int) -> List[Path]:
+    start = file_path.resolve()
+    if start not in graph or limit <= 0:
+        return []
+    seen = {start}
+    q: List[Tuple[Path, int]] = [(start, 0)]
+    out: List[Path] = []
+    while q and len(out) < limit:
+        cur, d = q.pop(0)
+        if d >= depth:
+            continue
+        for n in graph.get(cur, set()):
+            if n in seen:
+                continue
+            seen.add(n)
+            out.append(n)
+            if len(out) >= limit:
+                break
+            q.append((n, d + 1))
+    return out
 
 
 def read_file_safely(p: Path, max_bytes: int) -> str:
@@ -131,7 +315,7 @@ Provide findings as a JSON object matching the specified schema.
         }
         if not is_fixed_temperature_model(model):
             params["temperature"] = temperature
-        resp = client.chat.completions.create(**params)
+        resp = _chat_with_retry(client, params)
         text = resp.choices[0].message.content or "{}"
         obj = json.loads(text)
         raw_findings = obj.get("findings", [])
@@ -171,7 +355,7 @@ Provide findings as a JSON object matching the specified schema.
                 confidence=None,
             )
         ]
-def expand_finding(client: OpenAI, model: str, file_path: Path, content: str, finding: Finding, temperature: float = 0.0) -> Dict[str, Any]:
+def expand_finding(client: OpenAI, model: str, file_path: Path, content: str, finding: Finding, temperature: float = 0.0, related_snippets: Optional[List[Tuple[Path, str]]] = None) -> Dict[str, Any]:
     """Request richer details for a single finding. Returns a details dict."""
     around = 20
     snippet = None
@@ -189,12 +373,22 @@ def expand_finding(client: OpenAI, model: str, file_path: Path, content: str, fi
         "Return ONLY a JSON object with keys: explanation, impact, proof_of_concept, fix_suggestion, "
         "references(array of strings of URLs or identifiers), evidence(object with start_line, end_line, snippet)."
     )
+    related_block = ""
+    if related_snippets:
+        parts = []
+        for rp, rtxt in related_snippets[:5]:
+            parts.append(f"\n[Related file: {rp}]\n{rtxt}\n")
+        related_block = "\n".join(parts)
+
     user_prompt = f"""
 File path: {file_path}
 Finding summary: severity={finding.severity}, line={finding.line}, cwe={finding.cwe}
 
 Code context (may be partial):
 {snippet or content}
+
+Related context (optional, partial):
+{related_block}
 
 Provide expanded details as a JSON object matching the specified keys.
 """
@@ -210,7 +404,7 @@ Provide expanded details as a JSON object matching the specified keys.
         }
         if not is_fixed_temperature_model(model):
             params["temperature"] = temperature
-        resp = client.chat.completions.create(**params)
+        resp = _chat_with_retry(client, params)
         text = resp.choices[0].message.content or "{}"
         obj = json.loads(text)
         evidence = obj.get("evidence") or {}
@@ -233,7 +427,7 @@ Provide expanded details as a JSON object matching the specified keys.
 
 
 
-def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: float = 0.0, verbose: bool = False, deep: bool = False, deep_limit: int = 10, ignore: Optional[List[str]] = None) -> dict:
+def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: float = 0.0, verbose: bool = False, deep: bool = False, deep_limit: int = 10, ignore: Optional[List[str]] = None, include_related: bool = False, context_depth: int = 1, context_files: int = 5, context_lines: int = 60) -> dict:
     load_dotenv()
     client = OpenAI()
 
@@ -241,23 +435,65 @@ def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: floa
     if verbose and is_fixed_temperature_model(model):
         sys.stderr.write("[scanner] Model enforces fixed temperature; ignoring custom temperature setting\n")
         sys.stderr.flush()
-    files_iter = list(iter_files(path, ignore_patterns=ignore)) if verbose else iter_files(path, ignore_patterns=ignore)
+    files_list = list(iter_files(path, ignore_patterns=ignore))
+    files_iter = files_list if verbose else files_list
+    import_graph: Dict[Path, Set[Path]] = {}
+    if include_related:
+        if verbose:
+            sys.stderr.write("[scanner] Building import graph for related context\n")
+            sys.stderr.flush()
+        import_graph = build_import_graph(path, files_list)
     if verbose and isinstance(files_iter, list):
         sys.stderr.write(f"[scanner] Starting scan of {len(files_iter)} files in {path}\n")
         sys.stderr.flush()
-    for file_path in files_iter:
+    if verbose:
+        if ignore:
+            sys.stderr.write(f"[scanner] Ignore patterns: {ignore}\n")
+        sys.stderr.write(f"[scanner] Files to scan after ignores: {len(files_list)}\n")
+        sys.stderr.flush()
+
+    def process_file(file_path: Path) -> List[Finding]:
+        loc_client = client  # reuse global client; API client is threadsafe for simple requests
         if verbose:
             sys.stderr.write(f"[scanner] Analyzing {file_path}\n")
             sys.stderr.flush()
         content = read_file_safely(file_path, max_bytes)
-        file_findings = analyze_file(client, model, file_path, content, temperature, verbose=verbose)
+        file_findings = analyze_file(loc_client, model, file_path, content, temperature, verbose=verbose)
         if deep and file_findings:
             for f in file_findings[:max(0, deep_limit)]:
                 if verbose:
                     sys.stderr.write(f"[scanner] Expanding finding at {file_path}:{f.line}\n")
                     sys.stderr.flush()
-                f.details = expand_finding(client, model, file_path, content, f, temperature=temperature)
-        all_findings.extend(file_findings)
+                related_snippets: Optional[List[Tuple[Path, str]]] = None
+                if include_related and import_graph:
+                    neighbors = related_files_for(file_path, import_graph, depth=context_depth, limit=context_files)
+                    snippets: List[Tuple[Path, str]] = []
+                    for nb in neighbors:
+                        try:
+                            txt = nb.read_text(encoding="utf-8", errors="replace")
+                            if len(txt) > context_lines * 200:
+                                txt = txt[:context_lines*100] + "\n...\n" + txt[-context_lines*100:]
+                            snippets.append((nb, txt))
+                        except Exception:
+                            continue
+                    related_snippets = snippets
+                f.details = expand_finding(loc_client, model, file_path, content, f, temperature=temperature, related_snippets=related_snippets)
+        return file_findings
+
+    results: List[Finding] = []
+    with ThreadPoolExecutor(max_workers=_CONCURRENCY) as pool:
+        future_to_path = {pool.submit(process_file, fp): fp for fp in files_iter}
+        for fut in as_completed(future_to_path):
+            try:
+                findings = fut.result()
+                results.extend(findings)
+            except Exception as e:
+                # Log and continue
+                if verbose:
+                    sys.stderr.write(f"[scanner] Worker error: {e}\n")
+                    sys.stderr.flush()
+                continue
+    all_findings.extend(results)
 
     if verbose:
         sys.stderr.write(f"[scanner] Completed scan. Total findings: {len(all_findings)}\n")
@@ -283,6 +519,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_scan.add_argument("--deep", action="store_true", help="Request richer per-finding details")
     p_scan.add_argument("--deep-limit", type=int, default=10, help="Max findings per file to expand")
     p_scan.add_argument("--ignore", help="Comma-separated glob patterns to ignore (relative to path)")
+    p_scan.add_argument("--include-related", action="store_true", help="Include related files context in deep analysis")
+    p_scan.add_argument("--context-depth", type=int, default=1, help="Depth in import graph for related files")
+    p_scan.add_argument("--context-files", type=int, default=5, help="Max related files")
+    p_scan.add_argument("--context-lines", type=int, default=60, help="Approx lines per related snippet budget")
+    p_scan.add_argument("--concurrency", type=int, default=4, help="Max parallel file analyses")
 
     args = parser.parse_args(argv)
 
@@ -292,7 +533,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(json.dumps({"error": f"path does not exist: {target}"}))
             return 2
         ignore = [s.strip() for s in (args.ignore.split(',') if args.ignore else []) if s.strip()]
-        result = run_scan(target, args.model, args.max_bytes, args.temperature, args.verbose, args.deep, args.deep_limit, ignore)
+        global _CONCURRENCY
+        _CONCURRENCY = max(1, int(args.concurrency))
+        result = run_scan(target, args.model, args.max_bytes, args.temperature, args.verbose, args.deep, args.deep_limit, ignore, args.include_related, args.context_depth, args.context_files, args.context_lines)
         print(json.dumps(result, indent=2))
         return 0
 

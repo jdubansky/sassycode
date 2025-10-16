@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from sqlalchemy import func, case, or_
 from croniter import croniter
 import time
 
@@ -156,7 +157,7 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/scans")
-def trigger_scan(project_id: int = Form(...), model: str = Form(...), deep: str = Form(None), db: Session = Depends(get_db)):
+def trigger_scan(project_id: int = Form(...), model: str = Form(...), deep: str = Form(None), include_related: str = Form(None), concurrency: int = Form(4), db: Session = Depends(get_db)):
     project = db.get(Project, project_id)
     if not project:
         return RedirectResponse(url="/", status_code=303)
@@ -183,6 +184,14 @@ def trigger_scan(project_id: int = Form(...), model: str = Form(...), deep: str 
         cmd.append("--deep")
     if project.ignore_globs:
         cmd += ["--ignore", project.ignore_globs]
+    if include_related:
+        cmd.append("--include-related")
+    if concurrency:
+        try:
+            c = max(1, int(concurrency))
+            cmd += ["--concurrency", str(c)]
+        except Exception:
+            pass
 
     # seed a startup log so UI shows activity immediately
     with session_scope() as session:
@@ -389,6 +398,8 @@ def _scheduler_loop():
                             # attach ignore globs from project if present
                             if p.ignore_globs:
                                 cmd += ["--ignore", p.ignore_globs]
+                            # include related files context for scheduled runs as well
+                            cmd.append("--include-related")
 
                             def run_and_ingest_bg(scan_id: int, cmd_list: list[str]):
                                 # Reuse logic from trigger_scan
@@ -453,6 +464,76 @@ def _scheduler_loop():
         except Exception as e:
             print(f"[scheduler] error: {e}")
         time.sleep(30)
+
+
+@app.get("/unique", response_class=HTMLResponse)
+def unique_findings_all(
+    request: Request,
+    q: str = "",
+    sort: str = "last_seen_desc",
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+):
+    page = max(1, int(page))
+    page_size = max(1, min(100, int(page_size)))
+
+    base = db.query(UniqueFinding, Project).join(Project, UniqueFinding.project_id == Project.id)
+
+    if q:
+        like = f"%{q}%"
+        base = base.filter(or_(
+            UniqueFinding.description.like(like),
+            UniqueFinding.last_description.like(like),
+            UniqueFinding.file_path.like(like),
+            UniqueFinding.cwe.like(like),
+            UniqueFinding.function_name.like(like),
+            UniqueFinding.entrypoint.like(like),
+            Project.name.like(like),
+        ))
+
+    sev_val = func.coalesce(UniqueFinding.severity, UniqueFinding.last_severity)
+    sev_rank = case(
+        (sev_val == "CRITICAL", 4),
+        (sev_val == "HIGH", 3),
+        (sev_val == "MEDIUM", 2),
+        (sev_val == "LOW", 1),
+        else_=0,
+    )
+
+    if sort == "last_seen_asc":
+        base = base.order_by(UniqueFinding.last_seen_at.asc().nulls_last())
+    elif sort == "severity_desc":
+        base = base.order_by(sev_rank.desc(), UniqueFinding.last_seen_at.desc())
+    elif sort == "severity_asc":
+        base = base.order_by(sev_rank.asc(), UniqueFinding.last_seen_at.desc())
+    elif sort == "occ_desc":
+        base = base.order_by(UniqueFinding.occurrences.desc(), UniqueFinding.last_seen_at.desc())
+    elif sort == "occ_asc":
+        base = base.order_by(UniqueFinding.occurrences.asc(), UniqueFinding.last_seen_at.desc())
+    elif sort == "project_asc":
+        base = base.order_by(Project.name.asc(), UniqueFinding.last_seen_at.desc())
+    elif sort == "file_asc":
+        base = base.order_by(UniqueFinding.file_path.asc())
+    else:
+        base = base.order_by(UniqueFinding.last_seen_at.desc())
+
+    total = base.count()
+    items = base.offset((page - 1) * page_size).limit(page_size).all()
+
+    return templates.TemplateResponse(
+        "unique_all.html",
+        {
+            "request": request,
+            "items": items,
+            "q": q,
+            "sort": sort,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "pages": (total + page_size - 1) // page_size,
+        },
+    )
 
 
 @app.get("/unique_findings/{uf_id}/details.json")

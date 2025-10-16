@@ -12,6 +12,7 @@
         <nav class="nav-links">
           <a href="/">Projects</a>
           <a href="/schedules">Schedules</a>
+          <a href="/unique">All Findings</a>
         </nav>
       </div>
     </header>
@@ -53,6 +54,13 @@
             <span class="muted">Some models (e.g., gpt-5) use a fixed temperature.</span>
             <label class="muted" style="display:flex;align-items:center;gap:6px;">
               <input type="checkbox" name="deep" value="1" /> Deep analysis
+            </label>
+            <label class="muted" style="display:flex;align-items:center;gap:6px;">
+              <input type="checkbox" name="include_related" value="1" /> Include related files
+            </label>
+            <label class="muted" style="display:flex;align-items:center;gap:6px;">
+              Concurrency
+              <input type="number" name="concurrency" value="4" min="1" max="32" style="width:80px;" />
             </label>
             <button class="btn-primary" type="submit">Run Scan</button>
           </form>
@@ -96,7 +104,6 @@
           <col class="sev-col" />
           <col />
           <col class="func-col" />
-          <col class="entry-col" />
           <col class="status-col" />
           <col class="file-col" />
           <col class="btn-col" />
@@ -105,9 +112,7 @@
           <tr>
             <th>Severity</th>
             <th>Description</th>
-            
-            <th>Function</th>
-            <th>Entrypoint</th>
+            <th>Function / Entrypoint</th>
             <th>Status</th>
             <th>File</th>
             <th></th>
@@ -118,8 +123,12 @@
           <tr data-severity="{{ (u.severity or u.last_severity or 'LOW') }}" data-occ="{{ u.occurrences or 1 }}" data-file="{{ u.file_path }}" data-lastseen="{{ u.last_seen_at.isoformat() if u.last_seen_at else '' }}">
             <td><span class="badge sev-{{ u.severity or u.last_severity or 'LOW' }}">{{ u.severity or u.last_severity or 'LOW' }}</span></td>
             <td>{{ u.description or u.last_description or '-' }}</td>
-            <td><code>{{ u.function_name or '-' }}</code></td>
-            <td><code>{{ u.entrypoint or '-' }}</code></td>
+            <td>
+              <div>
+                <code>{{ u.function_name or '-' }}</code><br/>
+                <code>{{ u.entrypoint or '-' }}</code>
+              </div>
+            </td>
             <td>{{ u.status or 'open' }}</td>
             <td><code class="wrap-code">{{ u.file_path }}</code></td>
             <td><button class="btn-primary" data-see-more="{{ u.id }}">See more</button></td>

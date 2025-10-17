@@ -28,6 +28,10 @@ class Scan(Base):
     status: Mapped[str] = mapped_column(String(32), default="pending")
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    scan_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)  # e.g., 'full', 'branch'
+    branch_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    base_sha: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    head_sha: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     project: Mapped[Project] = relationship(back_populates="scans")
     findings: Mapped[list["Finding"]] = relationship(back_populates="scan", cascade="all, delete-orphan")

@@ -121,6 +121,17 @@ CREATE TABLE IF NOT EXISTS schedules (
 );
 """
         )
+
+        # Add branch scan fields to scans if missing
+        existing_scans = table_columns("scans")
+        for col, coltype in [
+            ("scan_type", "VARCHAR(32)"),
+            ("branch_name", "VARCHAR(255)"),
+            ("base_sha", "VARCHAR(64)"),
+            ("head_sha", "VARCHAR(64)"),
+        ]:
+            if col not in existing_scans:
+                conn.exec_driver_sql(f"ALTER TABLE scans ADD COLUMN {col} {coltype} NULL")
         conn.exec_driver_sql(
             """
 CREATE TABLE IF NOT EXISTS schedule_projects (

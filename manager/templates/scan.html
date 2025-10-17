@@ -24,6 +24,9 @@
     </form>
     <p>Model: <code>{{ scan.model }}</code></p>
     <p>Project: <code>{{ scan.project.name }}</code></p>
+    {% if scan.scan_type or scan.branch_name %}
+    <p class="muted">Scan type: <code>{{ scan.scan_type or 'full' }}</code>{% if scan.branch_name %} &nbsp; Branch: <code>{{ scan.branch_name }}</code>{% endif %}</p>
+    {% endif %}
     <h2>Findings</h2>
     <table>
       <thead>

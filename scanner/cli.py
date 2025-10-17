@@ -11,6 +11,8 @@ import time as _time
 
 from dotenv import load_dotenv
 from openai import OpenAI
+import httpx
+import os
 
 
 SUPPORTED_EXTENSIONS = {
@@ -27,6 +29,10 @@ def is_fixed_temperature_model(model: str) -> bool:
     return any(m.startswith(x) for x in FIXED_TEMP_MODELS)
 
 _CONCURRENCY = 4
+_GIT_BRANCH: Optional[str] = None
+_GIT_BASE: Optional[str] = None
+_GIT_HEAD: Optional[str] = None
+_ONLY_CHANGED: bool = False
 
 
 def _chat_with_retry(client: OpenAI, params: Dict[str, Any], max_attempts: int = 4) -> Any:
@@ -274,6 +280,93 @@ def related_files_for(file_path: Path, graph: Dict[Path, Set[Path]], depth: int,
     return out
 
 
+def git_changed_files(repo_path: Path, base: Optional[str], head: Optional[str], only_changed: bool, branch: Optional[str]) -> Optional[List[Path]]:
+    """Return a list of changed file Paths relative to repo_path using git diff.
+    - If branch is provided, diff against that branch from HEAD (or merge-base).
+    - Else if base/head provided, diff base...head.
+    - Else if only_changed, diff HEAD..working-tree.
+    Returns None if git invocation fails, so caller can fall back to full scan.
+    """
+    import subprocess as sp
+    try:
+        if branch:
+            # git diff --name-only $(git merge-base HEAD branch)..branch
+            mb = sp.check_output(["git", "-C", str(repo_path), "merge-base", "HEAD", branch], text=True).strip()
+            args = ["git", "-C", str(repo_path), "diff", "--name-only", f"{mb}..{branch}"]
+        elif base or head:
+            base = base or "origin/main"
+            head = head or "HEAD"
+            args = ["git", "-C", str(repo_path), "diff", "--name-only", f"{base}..{head}"]
+        elif only_changed:
+            args = ["git", "-C", str(repo_path), "diff", "--name-only", "HEAD"]
+        else:
+            return None
+        out = sp.check_output(args, text=True)
+        files = []
+        for line in out.splitlines():
+            p = (repo_path / line.strip()).resolve()
+            if p.exists():
+                files.append(p)
+        return files
+    except Exception:
+        return None
+
+
+def _parse_repo_pr(spec: str) -> Optional[Tuple[str, str, int]]:
+    """Parse "owner/repo#123" into (owner, repo, number)."""
+    try:
+        left, num = spec.split("#", 1)
+        owner, repo = left.split("/", 1)
+        return owner, repo, int(num)
+    except Exception:
+        return None
+
+
+def github_pr_files_to_scan(repo_path: Path, pr_spec: str, token: Optional[str]) -> Optional[Tuple[List[Path], Dict[str, Any]]]:
+    """Fetch changed files for a PR via GitHub API and map to local paths.
+    Returns (files, meta) where meta contains repo_slug, pr_number, base_sha, head_sha, head_ref.
+    """
+    parsed = _parse_repo_pr(pr_spec)
+    if not parsed:
+        return None
+    owner, repo, number = parsed
+    headers = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    base_url = os.getenv("GITHUB_API_BASE", "https://api.github.com")
+    try:
+        with httpx.Client(timeout=30) as client:
+            pr_resp = client.get(f"{base_url}/repos/{owner}/{repo}/pulls/{number}", headers=headers)
+            pr_resp.raise_for_status()
+            pr = pr_resp.json()
+            base_sha = pr.get("base", {}).get("sha")
+            head_sha = pr.get("head", {}).get("sha")
+            head_ref = pr.get("head", {}).get("ref")
+
+            files: List[Path] = []
+            page = 1
+            while True:
+                r = client.get(f"{base_url}/repos/{owner}/{repo}/pulls/{number}/files", params={"per_page": 100, "page": page}, headers=headers)
+                r.raise_for_status()
+                arr = r.json()
+                if not arr:
+                    break
+                for it in arr:
+                    if it.get("status") == "removed":
+                        continue
+                    filename = it.get("filename")
+                    if not filename:
+                        continue
+                    p = (repo_path / filename).resolve()
+                    if p.exists() and p.suffix.lower() in SUPPORTED_EXTENSIONS:
+                        files.append(p)
+                page += 1
+            meta = {"repo_slug": f"{owner}/{repo}", "pr_number": number, "base_sha": base_sha, "head_sha": head_sha, "head_ref": head_ref}
+            return files, meta
+    except Exception:
+        return None
+
+
 def read_file_safely(p: Path, max_bytes: int) -> str:
     try:
         data = p.read_bytes()
@@ -427,7 +520,7 @@ Provide expanded details as a JSON object matching the specified keys.
 
 
 
-def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: float = 0.0, verbose: bool = False, deep: bool = False, deep_limit: int = 10, ignore: Optional[List[str]] = None, include_related: bool = False, context_depth: int = 1, context_files: int = 5, context_lines: int = 60) -> dict:
+def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: float = 0.0, verbose: bool = False, deep: bool = False, deep_limit: int = 10, ignore: Optional[List[str]] = None, include_related: bool = False, context_depth: int = 1, context_files: int = 5, context_lines: int = 60, github_pr: Optional[str] = None) -> dict:
     load_dotenv()
     client = OpenAI()
 
@@ -435,7 +528,18 @@ def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: floa
     if verbose and is_fixed_temperature_model(model):
         sys.stderr.write("[scanner] Model enforces fixed temperature; ignoring custom temperature setting\n")
         sys.stderr.flush()
-    files_list = list(iter_files(path, ignore_patterns=ignore))
+    # Determine file set: optionally restrict to git-changed files
+    # Honor git filters if provided via module-level knobs
+    changed_list = None
+    pr_meta: Dict[str, Any] = {}
+    if github_pr:
+        token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
+        pr = github_pr_files_to_scan(path, github_pr, token)
+        if pr:
+            changed_list, pr_meta = pr
+    if not changed_list:
+        changed_list = git_changed_files(path, base=_GIT_BASE, head=_GIT_HEAD, only_changed=_ONLY_CHANGED, branch=_GIT_BRANCH)
+    files_list = list(iter_files(path, ignore_patterns=ignore)) if not changed_list else [p for p in changed_list if p.suffix.lower() in SUPPORTED_EXTENSIONS]
     files_iter = files_list if verbose else files_list
     import_graph: Dict[Path, Set[Path]] = {}
     if include_related:
@@ -502,6 +606,7 @@ def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: floa
         "project_path": str(path.resolve()),
         "model": model,
         "generated_at": int(time.time()),
+        **({"scan_type": "pr", **pr_meta} if pr_meta else {}),
         "findings": [asdict(f) for f in all_findings],
     }
 
@@ -524,6 +629,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_scan.add_argument("--context-files", type=int, default=5, help="Max related files")
     p_scan.add_argument("--context-lines", type=int, default=60, help="Approx lines per related snippet budget")
     p_scan.add_argument("--concurrency", type=int, default=4, help="Max parallel file analyses")
+    # Git/PR scanning options
+    p_scan.add_argument("--branch", help="Scan only files changed on this branch vs HEAD merge-base")
+    p_scan.add_argument("--git-base", help="Diff base (e.g., origin/main)")
+    p_scan.add_argument("--git-head", help="Diff head (e.g., HEAD)")
+    p_scan.add_argument("--only-changed", action="store_true", help="Scan only working tree changes vs HEAD")
+    p_scan.add_argument("--post-to", help="Management console base URL (e.g., http://localhost:8008)")
+    p_scan.add_argument("--project-name", help="Project name for console ingestion")
+    p_scan.add_argument("--github-pr", help="Scan only files from this PR, format owner/repo#number")
 
     args = parser.parse_args(argv)
 
@@ -535,7 +648,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         ignore = [s.strip() for s in (args.ignore.split(',') if args.ignore else []) if s.strip()]
         global _CONCURRENCY
         _CONCURRENCY = max(1, int(args.concurrency))
-        result = run_scan(target, args.model, args.max_bytes, args.temperature, args.verbose, args.deep, args.deep_limit, ignore, args.include_related, args.context_depth, args.context_files, args.context_lines)
+        # If a branch/base/head/only-changed were provided, re-compute the file list in run (hack: reuse global by shadowing via environment isn't ideal).
+        # Simpler: re-run run_scan with environment variables not necessary. We'll dynamically patch the initial selection here:
+        # Compute changed set and temporarily monkey-patch files_list building by passing via globals.
+        # For clarity, we rebuild inside run by setting globals using args; then call run again.
+        # Simpler approach: just perform the git filter here and pass ignore that list by narrowing path later would be complex.
+        # Therefore, re-implement minimal path selection by temporarily overriding 'files_list' inside run is not trivial. Instead,
+        # we'll call a helper inline here and then feed through standard pipeline by limiting includes via context on verbose print only.
+        # For now, we'll set module-level knobs to pick up in run.
+        global _GIT_BRANCH, _GIT_BASE, _GIT_HEAD, _ONLY_CHANGED
+        _GIT_BRANCH, _GIT_BASE, _GIT_HEAD, _ONLY_CHANGED = args.branch, args.git_base, args.git_head, args.only_changed
+        result = run_scan(target, args.model, args.max_bytes, args.temperature, args.verbose, args.deep, args.deep_limit, ignore, args.include_related, args.context_depth, args.context_files, args.context_lines, args.github_pr)
+
+        if args.post_to:
+            payload = dict(result)
+            payload["project_name"] = args.project_name or str(target.name)
+            try:
+                url = args.post_to.rstrip("/") + "/api/ingest"
+                r = httpx.post(url, json=payload, timeout=60)
+                if args.verbose:
+                    sys.stderr.write(f"[scanner] POST {url} -> {r.status_code}\n")
+                    sys.stderr.flush()
+            except Exception as e:
+                if args.verbose:
+                    sys.stderr.write(f"[scanner] POST error: {e}\n")
+                    sys.stderr.flush()
+
         print(json.dumps(result, indent=2))
         return 0
 

@@ -157,12 +157,12 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/scans")
-def trigger_scan(project_id: int = Form(...), model: str = Form(...), deep: str = Form(None), include_related: str = Form(None), concurrency: int = Form(4), db: Session = Depends(get_db)):
+def trigger_scan(project_id: int = Form(...), model: str = Form(...), deep: str = Form(None), include_related: str = Form(None), concurrency: int = Form(4), branch_name: str = Form(""), db: Session = Depends(get_db)):
     project = db.get(Project, project_id)
     if not project:
         return RedirectResponse(url="/", status_code=303)
 
-    scan = Scan(project_id=project.id, model=model, status="running", started_at=datetime.utcnow())
+    scan = Scan(project_id=project.id, model=model, status="running", started_at=datetime.utcnow(), scan_type=("branch" if branch_name else "full"), branch_name=(branch_name or None))
     db.add(scan)
     db.commit()
     db.refresh(scan)
@@ -180,6 +180,8 @@ def trigger_scan(project_id: int = Form(...), model: str = Form(...), deep: str 
         model,
         "--verbose",
     ]
+    if branch_name:
+        cmd += ["--branch", branch_name]
     if deep:
         cmd.append("--deep")
     if project.ignore_globs:
@@ -353,6 +355,62 @@ def scan_logs_json(scan_id: int, db: Session = Depends(get_db)):
             for l in logs
         ],
     }
+
+
+# Ingest endpoint for CI/CD posts from the scanner CLI
+@app.post("/api/ingest")
+def ingest_results(payload: dict, db: Session = Depends(get_db)):
+    # Expected payload: { project_name, project_path, model, generated_at, findings: [...] }
+    project_name = payload.get("project_name") or payload.get("project") or "Unnamed"
+    project_path = payload.get("project_path") or ""
+    model = payload.get("model") or "unknown"
+    findings = payload.get("findings") or []
+    scan_type = payload.get("scan_type")
+    branch_name = payload.get("head_ref") or payload.get("branch_name")
+    base_sha = payload.get("base_sha")
+    head_sha = payload.get("head_sha")
+
+    # Upsert project by name
+    project = db.query(Project).filter(Project.name == project_name).one_or_none()
+    if project is None:
+        project = Project(name=project_name, path=project_path)
+        db.add(project)
+        db.flush()
+    else:
+        # update path if provided
+        if project_path:
+            project.path = project_path
+
+    # Create a scan row
+    scan = Scan(project_id=project.id, model=model, status="completed", started_at=datetime.utcnow(), completed_at=datetime.utcnow(), scan_type=scan_type, branch_name=branch_name, base_sha=base_sha, head_sha=head_sha)
+    db.add(scan)
+    db.flush()
+
+    # Ingest findings using the same unique finding logic
+    for f in findings:
+        fp_parts = [
+            (f.get("file_path") or "").strip().lower(),
+            ",".join(f.get("cwe", []) or []) if isinstance(f.get("cwe"), list) else (f.get("cwe") or ""),
+            (f.get("function_name") or "").strip().lower(),
+            (f.get("entrypoint") or "").strip().lower(),
+        ]
+        fingerprint = "|".join(fp_parts)
+        uf = db.query(UniqueFinding).filter(UniqueFinding.project_id == project.id, UniqueFinding.fingerprint == fingerprint).one_or_none()
+        if uf is None:
+            uf = UniqueFinding(project_id=project.id, fingerprint=fingerprint, file_path=f.get("file_path", ""), cwe=",".join(f.get("cwe", []) or []) or None, function_name=f.get("function_name"), entrypoint=f.get("entrypoint"), last_line=f.get("line"), last_severity=f.get("severity"), last_description=f.get("description"), severity=f.get("severity"), description=f.get("description"))
+            db.add(uf)
+            db.flush()
+        else:
+            uf.last_seen_at = datetime.utcnow()
+            uf.occurrences = (uf.occurrences or 0) + 1
+            uf.last_line = f.get("line")
+            uf.last_severity = f.get("severity")
+            uf.last_description = f.get("description")
+
+        db.add(Finding(scan_id=scan.id, unique_finding_id=uf.id, file_path=f.get("file_path", ""), severity=f.get("severity", "LOW"), line=f.get("line"), rule_id=f.get("rule_id"), cwe=",".join(f.get("cwe", []) or []) or None, description=f.get("description", ""), recommendation=f.get("recommendation"), confidence=f.get("confidence"), function_name=f.get("function_name"), entrypoint=f.get("entrypoint"), arguments=",".join(f.get("arguments", []) or []) or None, root_cause=f.get("root_cause"), details_json=json.dumps(f.get("details")) if f.get("details") else None))
+
+    db.commit()
+    return {"status": "ok", "project_id": project.id, "scan_id": scan.id, "num_findings": len(findings)}
 
 
 def _scheduler_loop():

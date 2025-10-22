@@ -29,9 +29,7 @@
             <option value="gpt-4o">gpt-4o</option>
             <option value="gpt-4o-mini" selected>gpt-4o-mini</option>
           </select>
-          <label class="muted" style="display:flex;align-items:center;gap:6px;">
-            <input type="checkbox" name="deep" value="1" /> Deep analysis
-          </label>
+          
         </form>
         <div class="toolbar">
           <label class="muted">Projects:</label>
@@ -53,7 +51,7 @@
             <th>Name</th>
             <th>Cron</th>
             <th>Model</th>
-            <th>Deep</th>
+            
             <th>Projects</th>
             <th>Last run</th>
             <th></th>
@@ -65,7 +63,7 @@
             <td>{{ s.name }}</td>
             <td><code>{{ s.cron }}</code></td>
             <td>{{ s.model }}</td>
-            <td>{{ 'yes' if s.deep else 'no' }}</td>
+            
             <td>
               {% set names = schedule_projects_map.get(s.id, []) %}
               {% if names %}

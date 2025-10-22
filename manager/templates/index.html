@@ -34,6 +34,13 @@
           <span class="muted">—</span>
           <code>{{ p.path }}</code>
           <a href="/projects/{{ p.id }}/edit" style="margin-left:8px;">Edit</a>
+          {% set c = counts.get(p.id) if counts else None %}
+          {% if c %}
+          <span class="muted" style="margin-left:8px;">|</span>
+          <span class="badge sev-HIGH" title="High">H {{ c.get('HIGH', 0) }}</span>
+          <span class="badge sev-MEDIUM" title="Medium">M {{ c.get('MEDIUM', 0) }}</span>
+          <span class="badge sev-LOW" title="Low">L {{ c.get('LOW', 0) }}</span>
+          {% endif %}
         </li>
         {% else %}
         <li class="muted">No projects yet.</li>

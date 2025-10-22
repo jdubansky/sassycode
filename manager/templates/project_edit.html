@@ -23,6 +23,10 @@
             <label>Ignore patterns (comma-separated globs)</label><br>
             <input type="text" name="ignore_globs" value="{{ project.ignore_globs or '' }}" placeholder="e.g., **/tests/**, **/.cache/**, *.md" />
           </div>
+          <div style="margin-bottom:8px;">
+            <label>Only filenames (comma-separated, supports globs)</label><br>
+            <input type="text" name="only_filenames" value="{{ project.only_filenames or '' }}" placeholder="e.g., flask.py, routes.py, *.controller.ts" />
+          </div>
           <button class="btn-primary" type="submit">Save</button>
         </form>
       </div>

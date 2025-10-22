@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Dict, Any, Set, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time as _time
+import fnmatch
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -91,7 +92,7 @@ def build_ignored(base_path: Path, ignore_patterns: Optional[List[str]]) -> Set[
     return ignored
 
 
-def iter_files(base_path: Path, ignore_patterns: Optional[List[str]] = None) -> Iterable[Path]:
+def iter_files(base_path: Path, ignore_patterns: Optional[List[str]] = None, include_name_patterns: Optional[List[str]] = None) -> Iterable[Path]:
     ignored = build_ignored(base_path, ignore_patterns)
     ignored_dirs = [p for p in ignored if p.exists() and p.is_dir()]
     for root, dirs, files in os.walk(base_path):
@@ -140,6 +141,11 @@ def iter_files(base_path: Path, ignore_patterns: Optional[List[str]] = None) -> 
             if skip_by_dir:
                 continue
             if p.suffix.lower() in SUPPORTED_EXTENSIONS:
+                if include_name_patterns:
+                    name_lc = p.name.lower()
+                    matched = any(fnmatch.fnmatch(name_lc, pat.strip().lower()) for pat in include_name_patterns if pat.strip())
+                    if not matched:
+                        continue
                 yield p
 
 
@@ -322,7 +328,7 @@ def _parse_repo_pr(spec: str) -> Optional[Tuple[str, str, int]]:
         return None
 
 
-def github_pr_files_to_scan(repo_path: Path, pr_spec: str, token: Optional[str]) -> Optional[Tuple[List[Path], Dict[str, Any]]]:
+def github_pr_files_to_scan(repo_path: Path, pr_spec: str, token: Optional[str], verbose: bool = False) -> Optional[Tuple[List[Path], Dict[str, Any]]]:
     """Fetch changed files for a PR via GitHub API and map to local paths.
     Returns (files, meta) where meta contains repo_slug, pr_number, base_sha, head_sha, head_ref.
     """
@@ -333,6 +339,9 @@ def github_pr_files_to_scan(repo_path: Path, pr_spec: str, token: Optional[str])
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    elif verbose:
+        sys.stderr.write("[scanner] No GITHUB_TOKEN/GH_TOKEN found; PR fetch may fail for private repos.\n")
+        sys.stderr.flush()
     base_url = os.getenv("GITHUB_API_BASE", "https://api.github.com")
     try:
         with httpx.Client(timeout=30) as client:
@@ -363,7 +372,16 @@ def github_pr_files_to_scan(repo_path: Path, pr_spec: str, token: Optional[str])
                 page += 1
             meta = {"repo_slug": f"{owner}/{repo}", "pr_number": number, "base_sha": base_sha, "head_sha": head_sha, "head_ref": head_ref}
             return files, meta
-    except Exception:
+    except httpx.HTTPStatusError as e:
+        if verbose:
+            code = getattr(e.response, "status_code", "?")
+            sys.stderr.write(f"[scanner] GitHub API error {code} while fetching PR {owner}/{repo}#{number}. If this is a private repo, set GITHUB_TOKEN or GH_TOKEN.\n")
+            sys.stderr.flush()
+        return None
+    except Exception as e:
+        if verbose:
+            sys.stderr.write(f"[scanner] Failed to fetch PR files: {e}\n")
+            sys.stderr.flush()
         return None
 
 
@@ -377,7 +395,7 @@ def read_file_safely(p: Path, max_bytes: int) -> str:
         return f"[error reading file: {e}]"
 
 
-def analyze_file(client: OpenAI, model: str, file_path: Path, content: str, temperature: float = 0.0, verbose: bool = False) -> List[Finding]:
+def analyze_file(client: OpenAI, model: str, file_path: Path, content: str, temperature: float = 0.0, verbose: bool = False, related_snippets: Optional[List[Tuple[Path, str]]] = None) -> List[Finding]:
     system_prompt = (
         "You are a strict SAST engine. Analyze code for security issues. "
         "Return ONLY a JSON object with a 'findings' array. Each finding MUST be: "
@@ -385,16 +403,28 @@ def analyze_file(client: OpenAI, model: str, file_path: Path, content: str, temp
         "rule_id(string or null), cwe(array of strings or null), description(string), "
         "recommendation(string with concrete remediation steps), confidence(string or null), "
         "function_name(string or null), entrypoint(string or null), arguments(array of strings or null), "
-        "root_cause(string or null)}."
+        "root_cause(string or null), details(object)}. "
+        "The 'details' object MUST include keys: explanation, impact, proof_of_concept, fix_suggestion, "
+        "references(array of strings), evidence(object with start_line, end_line, snippet)."
     )
+
+    related_block = ""
+    if related_snippets:
+        parts = []
+        for rp, rtxt in related_snippets[:5]:
+            parts.append(f"\n[Related file: {rp}]\n{rtxt}\n")
+        related_block = "\n".join(parts)
 
     user_prompt = f"""
 File path: {file_path}
 
-Code:
+Code (may be truncated):
 {content}
 
-Provide findings as a JSON object matching the specified schema.
+Related context (optional, partial):
+{related_block}
+
+Provide findings as a JSON object matching the specified schema, INCLUDING the 'details' object for each finding.
 """
 
     try:
@@ -405,6 +435,7 @@ Provide findings as a JSON object matching the specified schema.
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
+            "max_tokens": 1600,
         }
         if not is_fixed_temperature_model(model):
             params["temperature"] = temperature
@@ -520,7 +551,7 @@ Provide expanded details as a JSON object matching the specified keys.
 
 
 
-def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: float = 0.0, verbose: bool = False, deep: bool = False, deep_limit: int = 10, ignore: Optional[List[str]] = None, include_related: bool = False, context_depth: int = 1, context_files: int = 5, context_lines: int = 60, github_pr: Optional[str] = None) -> dict:
+def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: float = 0.0, verbose: bool = False, deep: bool = False, deep_limit: int = 10, ignore: Optional[List[str]] = None, include_related: bool = False, context_depth: int = 1, context_files: int = 5, context_lines: int = 60, github_pr: Optional[str] = None, only_names: Optional[List[str]] = None) -> dict:
     load_dotenv()
     client = OpenAI()
 
@@ -534,12 +565,19 @@ def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: floa
     pr_meta: Dict[str, Any] = {}
     if github_pr:
         token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
-        pr = github_pr_files_to_scan(path, github_pr, token)
+        pr = github_pr_files_to_scan(path, github_pr, token, verbose=verbose)
         if pr:
             changed_list, pr_meta = pr
     if not changed_list:
         changed_list = git_changed_files(path, base=_GIT_BASE, head=_GIT_HEAD, only_changed=_ONLY_CHANGED, branch=_GIT_BRANCH)
-    files_list = list(iter_files(path, ignore_patterns=ignore)) if not changed_list else [p for p in changed_list if p.suffix.lower() in SUPPORTED_EXTENSIONS]
+    if not changed_list:
+        files_list = list(iter_files(path, ignore_patterns=ignore, include_name_patterns=only_names))
+    else:
+        tmp = [p for p in changed_list if p.suffix.lower() in SUPPORTED_EXTENSIONS]
+        if only_names:
+            files_list = [p for p in tmp if any(fnmatch.fnmatch(p.name.lower(), pat.strip().lower()) for pat in only_names if pat.strip())]
+        else:
+            files_list = tmp
     files_iter = files_list if verbose else files_list
     import_graph: Dict[Path, Set[Path]] = {}
     if include_related:
@@ -553,7 +591,9 @@ def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: floa
     if verbose:
         if ignore:
             sys.stderr.write(f"[scanner] Ignore patterns: {ignore}\n")
-        sys.stderr.write(f"[scanner] Files to scan after ignores: {len(files_list)}\n")
+        if only_names:
+            sys.stderr.write(f"[scanner] Only filenames: {only_names}\n")
+        sys.stderr.write(f"[scanner] Files to scan after filters: {len(files_list)}\n")
         sys.stderr.flush()
 
     def process_file(file_path: Path) -> List[Finding]:
@@ -562,25 +602,29 @@ def run_scan(path: Path, model: str, max_bytes: int = 200_000, temperature: floa
             sys.stderr.write(f"[scanner] Analyzing {file_path}\n")
             sys.stderr.flush()
         content = read_file_safely(file_path, max_bytes)
-        file_findings = analyze_file(loc_client, model, file_path, content, temperature, verbose=verbose)
+        # Build related context once per file if requested
+        related_snippets: Optional[List[Tuple[Path, str]]] = None
+        if include_related and import_graph:
+            neighbors = related_files_for(file_path, import_graph, depth=context_depth, limit=context_files)
+            snippets: List[Tuple[Path, str]] = []
+            for nb in neighbors:
+                try:
+                    txt = nb.read_text(encoding="utf-8", errors="replace")
+                    if len(txt) > context_lines * 200:
+                        txt = txt[:context_lines*100] + "\n...\n" + txt[-context_lines*100:]
+                    snippets.append((nb, txt))
+                except Exception:
+                    continue
+            related_snippets = snippets
+        file_findings = analyze_file(loc_client, model, file_path, content, temperature, verbose=verbose, related_snippets=related_snippets)
         if deep and file_findings:
+            # Only expand findings that are missing details (backward compatibility)
             for f in file_findings[:max(0, deep_limit)]:
+                if f.details:
+                    continue
                 if verbose:
                     sys.stderr.write(f"[scanner] Expanding finding at {file_path}:{f.line}\n")
                     sys.stderr.flush()
-                related_snippets: Optional[List[Tuple[Path, str]]] = None
-                if include_related and import_graph:
-                    neighbors = related_files_for(file_path, import_graph, depth=context_depth, limit=context_files)
-                    snippets: List[Tuple[Path, str]] = []
-                    for nb in neighbors:
-                        try:
-                            txt = nb.read_text(encoding="utf-8", errors="replace")
-                            if len(txt) > context_lines * 200:
-                                txt = txt[:context_lines*100] + "\n...\n" + txt[-context_lines*100:]
-                            snippets.append((nb, txt))
-                        except Exception:
-                            continue
-                    related_snippets = snippets
                 f.details = expand_finding(loc_client, model, file_path, content, f, temperature=temperature, related_snippets=related_snippets)
         return file_findings
 
@@ -624,6 +668,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_scan.add_argument("--deep", action="store_true", help="Request richer per-finding details")
     p_scan.add_argument("--deep-limit", type=int, default=10, help="Max findings per file to expand")
     p_scan.add_argument("--ignore", help="Comma-separated glob patterns to ignore (relative to path)")
+    p_scan.add_argument("--only-names", help="Comma-separated basenames/globs to include (e.g., flask.py, routes.py, *.config.js)")
     p_scan.add_argument("--include-related", action="store_true", help="Include related files context in deep analysis")
     p_scan.add_argument("--context-depth", type=int, default=1, help="Depth in import graph for related files")
     p_scan.add_argument("--context-files", type=int, default=5, help="Max related files")
@@ -646,6 +691,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(json.dumps({"error": f"path does not exist: {target}"}))
             return 2
         ignore = [s.strip() for s in (args.ignore.split(',') if args.ignore else []) if s.strip()]
+        only_names = [s.strip() for s in (args.only_names.split(',') if args.only_names else []) if s.strip()]
         global _CONCURRENCY
         _CONCURRENCY = max(1, int(args.concurrency))
         # If a branch/base/head/only-changed were provided, re-compute the file list in run (hack: reuse global by shadowing via environment isn't ideal).
@@ -658,7 +704,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # For now, we'll set module-level knobs to pick up in run.
         global _GIT_BRANCH, _GIT_BASE, _GIT_HEAD, _ONLY_CHANGED
         _GIT_BRANCH, _GIT_BASE, _GIT_HEAD, _ONLY_CHANGED = args.branch, args.git_base, args.git_head, args.only_changed
-        result = run_scan(target, args.model, args.max_bytes, args.temperature, args.verbose, args.deep, args.deep_limit, ignore, args.include_related, args.context_depth, args.context_files, args.context_lines, args.github_pr)
+        result = run_scan(target, args.model, args.max_bytes, args.temperature, args.verbose, args.deep, args.deep_limit, ignore, args.include_related, args.context_depth, args.context_files, args.context_lines, args.github_pr, only_names)
 
         if args.post_to:
             payload = dict(result)

@@ -15,6 +15,7 @@ class Project(Base):
     path: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     ignore_globs: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # comma-separated glob patterns
+    only_filenames: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # comma-separated basenames/globs
 
     scans: Mapped[list["Scan"]] = relationship(back_populates="project", cascade="all, delete-orphan")
 

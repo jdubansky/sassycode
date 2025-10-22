@@ -106,6 +106,10 @@ CREATE TABLE IF NOT EXISTS unique_findings (
         existing_projects = table_columns("projects")
         if "ignore_globs" not in existing_projects:
             conn.exec_driver_sql("ALTER TABLE projects ADD COLUMN ignore_globs TEXT NULL")
+        # Add only_filenames to projects if missing
+        existing_projects = table_columns("projects")
+        if "only_filenames" not in existing_projects:
+            conn.exec_driver_sql("ALTER TABLE projects ADD COLUMN only_filenames TEXT NULL")
 
         # Create schedules tables if not exist
         conn.exec_driver_sql(

@@ -34,6 +34,10 @@
             <label>Ignore patterns (comma-separated globs)</label><br>
             <input type="text" name="ignore_globs" value="{{ project.ignore_globs or '' }}" placeholder="e.g., **/tests/**, **/.cache/**, *.md" />
           </div>
+          <div style="margin-bottom:8px;">
+            <label>Only filenames (comma-separated, supports globs)</label><br>
+            <input type="text" name="only_filenames" value="{{ project.only_filenames or '' }}" placeholder="e.g., flask.py, routes.py, *.controller.ts" />
+          </div>
           <button class="btn-primary" type="submit">Save</button>
         </form>
         <form method="post" action="/projects/{{ project.id }}/delete" onsubmit="return confirm('Delete project {{ project.name }}? This will remove all scans and findings.');" style="position:absolute; right:16px; top:16px;">
@@ -52,9 +56,6 @@
               <option value="gpt-4o-mini" selected>gpt-4o-mini</option>
             </select>
             <span class="muted">Some models (e.g., gpt-5) use a fixed temperature.</span>
-            <label class="muted" style="display:flex;align-items:center;gap:6px;">
-              <input type="checkbox" name="deep" value="1" /> Deep analysis
-            </label>
             <label class="muted" style="display:flex;align-items:center;gap:6px;">
               <input type="checkbox" name="include_related" value="1" /> Include related files
             </label>

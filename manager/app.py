@@ -70,7 +70,26 @@ def on_startup():
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, db: Session = Depends(get_db)):
     projects = db.query(Project).all()
-    return templates.TemplateResponse("index.html", {"request": request, "projects": projects})
+    # Build per-project unique severity counts (using canonical severity if present, else last_severity)
+    counts: dict[int, dict[str, int]] = {}
+    for p in projects:
+        rows = (
+            db.query(
+                (UniqueFinding.severity).label("sev"),
+                (UniqueFinding.last_severity).label("last_sev"),
+            )
+            .filter(UniqueFinding.project_id == p.id)
+            .all()
+        )
+        c = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        for sev, last_sev in rows:
+            s = sev or last_sev or "LOW"
+            if s in c:
+                c[s] += 1
+            else:
+                c["LOW"] += 1
+        counts[p.id] = c
+    return templates.TemplateResponse("index.html", {"request": request, "projects": projects, "counts": counts})
 @app.get("/schedules", response_class=HTMLResponse)
 def schedules_page(request: Request, db: Session = Depends(get_db)):
     schedules = db.query(Schedule).all()
@@ -135,13 +154,14 @@ def edit_project(project_id: int, request: Request, db: Session = Depends(get_db
 
 
 @app.post("/projects/{project_id}")
-def update_project(project_id: int, name: str = Form(...), path: str = Form(...), ignore_globs: str = Form(""), db: Session = Depends(get_db)):
+def update_project(project_id: int, name: str = Form(...), path: str = Form(...), ignore_globs: str = Form(""), only_filenames: str = Form(""), db: Session = Depends(get_db)):
     project = db.get(Project, project_id)
     if not project:
         return RedirectResponse(url="/", status_code=303)
     project.name = name
     project.path = path
     project.ignore_globs = ignore_globs or None
+    project.only_filenames = only_filenames or None
     db.add(project)
     db.commit()
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
@@ -188,6 +208,8 @@ def trigger_scan(project_id: int = Form(...), model: str = Form(...), deep: str 
         cmd += ["--ignore", project.ignore_globs]
     if include_related:
         cmd.append("--include-related")
+    if project.only_filenames:
+        cmd += ["--only-names", project.only_filenames]
     if concurrency:
         try:
             c = max(1, int(concurrency))
@@ -456,6 +478,8 @@ def _scheduler_loop():
                             # attach ignore globs from project if present
                             if p.ignore_globs:
                                 cmd += ["--ignore", p.ignore_globs]
+                            if getattr(p, "only_filenames", None):
+                                cmd += ["--only-names", p.only_filenames]
                             # include related files context for scheduled runs as well
                             cmd.append("--include-related")
 

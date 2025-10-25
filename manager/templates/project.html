@@ -97,45 +97,67 @@
           <option value="last_seen_asc">Sort: Last seen (oldest)</option>
           <option value="severity_desc">Sort: Severity (high→low)</option>
           <option value="severity_asc">Sort: Severity (low→high)</option>
+          <option value="status_asc">Sort: Status (A→Z)</option>
+          <option value="status_desc">Sort: Status (Z→A)</option>
           <option value="occ_desc">Sort: Occurrences (high→low)</option>
           <option value="occ_asc">Sort: Occurrences (low→high)</option>
           <option value="file_asc">Sort: File (A→Z)</option>
         </select>
+        <div style="margin-left:auto; display:flex; align-items:center; gap:8px;">
+          <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="selectAllU" /> Select all</label>
+          <form id="bulkStatusForm" method="post" action="/unique_findings/bulk_status" style="display:flex;gap:6px;align-items:center;">
+            <input type="hidden" name="ids" id="bulkIdsU" value="" />
+            <input type="hidden" name="redirect" value="/projects/{{ project.id }}" />
+            <select name="status">
+              <option value="open">open</option>
+              <option value="triaging">triaging</option>
+              <option value="false_positive">false_positive</option>
+              <option value="fixed">fixed</option>
+            </select>
+            <button class="btn" type="submit">Set status</button>
+          </form>
+          <form id="bulkDeleteForm" method="post" action="/unique_findings/bulk_delete" onsubmit="return confirm('Delete selected findings?');">
+            <input type="hidden" name="ids" id="bulkIdsDelU" value="" />
+            <input type="hidden" name="redirect" value="/projects/{{ project.id }}" />
+            <button class="btn-danger" type="submit">Delete selected</button>
+          </form>
+        </div>
       </div>
       {% set uniques = db.query(models.UniqueFinding).filter(models.UniqueFinding.project_id == project.id).order_by(models.UniqueFinding.last_seen_at.desc()).all() %}
       {% if uniques %}
-      <table id="uniqTable" class="uniq-table">
+      <table id="uniqTable" class="uniq-table" data-resize-key="project-{{ project.id }}">
         <colgroup>
+          <col class="sel-col" />
           <col class="sev-col" />
-          <col />
-          <col class="func-col" />
           <col class="status-col" />
-          <col class="file-col" />
+          <col class="desc-col" />
+          <col class="func-col" />
           <col class="btn-col" />
         </colgroup>
         <thead>
           <tr>
+            <th></th>
             <th>Severity</th>
-            <th>Description</th>
-            <th>Function / Entrypoint</th>
             <th>Status</th>
-            <th>File</th>
+            <th>Description</th>
+            <th>Function / Entrypoint / File</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
         {% for u in uniques %}
           <tr data-severity="{{ (u.severity or u.last_severity or 'LOW') }}" data-occ="{{ u.occurrences or 1 }}" data-file="{{ u.file_path }}" data-lastseen="{{ u.last_seen_at.isoformat() if u.last_seen_at else '' }}">
+            <td><input type="checkbox" class="pickU" value="{{ u.id }}" /></td>
             <td><span class="badge sev-{{ u.severity or u.last_severity or 'LOW' }}">{{ u.severity or u.last_severity or 'LOW' }}</span></td>
+            <td>{{ u.status or 'open' }}</td>
             <td>{{ u.description or u.last_description or '-' }}</td>
             <td>
               <div>
                 <code>{{ u.function_name or '-' }}</code><br/>
-                <code>{{ u.entrypoint or '-' }}</code>
+                <code>{{ u.entrypoint or '-' }}</code><br/>
+                <code class="wrap-code">{{ u.file_path }}</code>
               </div>
             </td>
-            <td>{{ u.status or 'open' }}</td>
-            <td><code class="wrap-code">{{ u.file_path }}</code></td>
             <td><button class="btn-primary" data-see-more="{{ u.id }}">See more</button></td>
           </tr>
         {% endfor %}
@@ -146,6 +168,29 @@
       {% endif %}
     </div>
     <script src="/static/app.js"></script>
+      <script>
+        (function(){
+          const selectAll = document.getElementById('selectAllU');
+          const picks = () => Array.from(document.querySelectorAll('.pickU:checked')).map(c=>c.value);
+          const idsField = document.getElementById('bulkIdsU');
+          const idsDelField = document.getElementById('bulkIdsDelU');
+          function sync(){
+            const ids = picks().join(',');
+            if (idsField) idsField.value = ids;
+            if (idsDelField) idsDelField.value = ids;
+          }
+          if (selectAll){
+            selectAll.addEventListener('change', function(){
+              const all = Array.from(document.querySelectorAll('.pickU'));
+              for (const c of all) c.checked = selectAll.checked;
+              sync();
+            });
+          }
+          document.addEventListener('change', function(e){
+            if (e.target && e.target.classList && e.target.classList.contains('pickU')) sync();
+          });
+        })();
+      </script>
   </body>
   </html>
 

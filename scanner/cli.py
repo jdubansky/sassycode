@@ -435,10 +435,13 @@ Provide findings as a JSON object matching the specified schema, INCLUDING the '
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "max_tokens": 1600,
         }
         if not is_fixed_temperature_model(model):
             params["temperature"] = temperature
+            params["max_tokens"] = 1600
+        else:
+            # Some models (e.g., gpt-5) use max_completion_tokens instead of max_tokens
+            params["max_completion_tokens"] = 1600
         resp = _chat_with_retry(client, params)
         text = resp.choices[0].message.content or "{}"
         obj = json.loads(text)
@@ -524,10 +527,12 @@ Provide expanded details as a JSON object matching the specified keys.
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "max_tokens": 1200,
         }
         if not is_fixed_temperature_model(model):
             params["temperature"] = temperature
+            params["max_tokens"] = 1200
+        else:
+            params["max_completion_tokens"] = 1200
         resp = _chat_with_retry(client, params)
         text = resp.choices[0].message.content or "{}"
         obj = json.loads(text)

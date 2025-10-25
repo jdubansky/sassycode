@@ -45,12 +45,19 @@ code { background: var(--code-bg); padding: 2px 6px; border-radius: 6px; border:
 .wrap-code { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
 .uniq-table { table-layout: fixed; width: 100%; }
 .uniq-table code.wrap-code { display: block; }
+.uniq-table col.sel-col { width: 44px; }
 .uniq-table col.sev-col { width: 100px; }
-.uniq-table col.func-col { width: 140px; }
+.uniq-table col.func-col { width: 300px; }
+.uniq-table col.project-col { width: 160px; }
 .uniq-table col.entry-col { width: 120px; }
 .uniq-table col.status-col { width: 120px; }
 .uniq-table col.btn-col { width: 110px; }
+.uniq-table col.desc-col { width: auto; }
 .uniq-table col.file-col { width: auto; }
+
+/* Column resizer */
+.col-resizer { position: absolute; right: -4px; top: 0; width: 8px; cursor: col-resize; user-select: none; height: 100%; }
+th { position: relative; }
 
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
 

@@ -589,6 +589,10 @@ def unique_findings_all(
         base = base.order_by(sev_rank.desc(), UniqueFinding.last_seen_at.desc())
     elif sort == "severity_asc":
         base = base.order_by(sev_rank.asc(), UniqueFinding.last_seen_at.desc())
+    elif sort == "status_asc":
+        base = base.order_by(UniqueFinding.status.asc().nulls_last(), UniqueFinding.last_seen_at.desc())
+    elif sort == "status_desc":
+        base = base.order_by(UniqueFinding.status.desc().nulls_last(), UniqueFinding.last_seen_at.desc())
     elif sort == "occ_desc":
         base = base.order_by(UniqueFinding.occurrences.desc(), UniqueFinding.last_seen_at.desc())
     elif sort == "occ_asc":
@@ -689,6 +693,29 @@ def delete_unique_finding(uf_id: int, db: Session = Depends(get_db)):
         db.delete(uf)
         db.commit()
     return RedirectResponse(url=f"/projects/{pid}" if pid else "/", status_code=303)
+
+
+@app.post("/unique_findings/bulk_status")
+def bulk_set_unique_finding_status(status: str = Form(...), ids: str = Form(""), redirect: str = Form("/"), db: Session = Depends(get_db)):
+    id_list = [int(x) for x in (ids.split(",") if ids else []) if x.strip().isdigit()]
+    if id_list:
+        q = db.query(UniqueFinding).filter(UniqueFinding.id.in_(id_list)).all()
+        for uf in q:
+            uf.status = status
+            db.add(uf)
+        db.commit()
+    return RedirectResponse(url=redirect or "/", status_code=303)
+
+
+@app.post("/unique_findings/bulk_delete")
+def bulk_delete_unique_findings(ids: str = Form(""), redirect: str = Form("/"), db: Session = Depends(get_db)):
+    id_list = [int(x) for x in (ids.split(",") if ids else []) if x.strip().isdigit()]
+    if id_list:
+        q = db.query(UniqueFinding).filter(UniqueFinding.id.in_(id_list)).all()
+        for uf in q:
+            db.delete(uf)
+        db.commit()
+    return RedirectResponse(url=redirect or "/", status_code=303)
 
 
 @app.post("/scans/{scan_id}/cancel")

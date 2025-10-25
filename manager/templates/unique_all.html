@@ -27,6 +27,8 @@
           <option value="last_seen_asc" {% if sort=='last_seen_asc' %}selected{% endif %}>Sort: Last seen (oldest)</option>
           <option value="severity_desc" {% if sort=='severity_desc' %}selected{% endif %}>Sort: Severity (high→low)</option>
           <option value="severity_asc" {% if sort=='severity_asc' %}selected{% endif %}>Sort: Severity (low→high)</option>
+          <option value="status_asc" {% if sort=='status_asc' %}selected{% endif %}>Sort: Status (A→Z)</option>
+          <option value="status_desc" {% if sort=='status_desc' %}selected{% endif %}>Sort: Status (Z→A)</option>
           <option value="occ_desc" {% if sort=='occ_desc' %}selected{% endif %}>Sort: Occurrences (high→low)</option>
           <option value="occ_asc" {% if sort=='occ_asc' %}selected{% endif %}>Sort: Occurrences (low→high)</option>
           <option value="project_asc" {% if sort=='project_asc' %}selected{% endif %}>Sort: Project (A→Z)</option>
@@ -37,38 +39,60 @@
         <span class="muted" style="margin-left:auto;">{{ total }} results</span>
       </form>
 
-      <table class="uniq-table">
+      <div class="toolbar" style="justify-content:flex-end; gap:8px;">
+        <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="selectAllA" /> Select all</label>
+        <form id="bulkStatusFormA" method="post" action="/unique_findings/bulk_status" style="display:flex;gap:6px;align-items:center;">
+          <input type="hidden" name="ids" id="bulkIdsA" value="" />
+          <input type="hidden" name="redirect" value="/unique?q={{ q }}&sort={{ sort }}&page={{ page }}&page_size={{ page_size }}" />
+          <select name="status">
+            <option value="open">open</option>
+            <option value="triaging">triaging</option>
+            <option value="false_positive">false_positive</option>
+            <option value="fixed">fixed</option>
+          </select>
+          <button class="btn" type="submit">Set status</button>
+        </form>
+        <form id="bulkDeleteFormA" method="post" action="/unique_findings/bulk_delete" onsubmit="return confirm('Delete selected findings?');">
+          <input type="hidden" name="ids" id="bulkIdsDelA" value="" />
+          <input type="hidden" name="redirect" value="/unique?q={{ q }}&sort={{ sort }}&page={{ page }}&page_size={{ page_size }}" />
+          <button class="btn-danger" type="submit">Delete selected</button>
+        </form>
+      </div>
+
+      <table class="uniq-table" data-resize-key="unique-all">
         <colgroup>
+          <col class="sel-col" />
           <col class="sev-col" />
-          <col />
-          <col class="func-col" />
           <col class="status-col" />
-          <col class="file-col" />
+          <col class="func-col" />
+          <col class="desc-col" />
+          <col class="project-col" />
           <col class="btn-col" />
         </colgroup>
         <thead>
           <tr>
+            <th></th>
             <th>Severity</th>
-            <th>Description</th>
-            <th>Function / Entrypoint</th>
             <th>Status</th>
-            <th>File</th>
+            <th>Description</th>
+            <th>Function / Entrypoint / File</th>
             <th>Project</th>
           </tr>
         </thead>
         <tbody>
           {% for u, p in items %}
           <tr>
+            <td><input type="checkbox" class="pickA" value="{{ u.id }}" /></td>
             <td><span class="badge sev-{{ u.severity or u.last_severity or 'LOW' }}">{{ u.severity or u.last_severity or 'LOW' }}</span></td>
+            <td>{{ u.status or 'open' }}</td>
             <td>{{ u.description or u.last_description or '-' }}</td>
             <td>
               <div>
                 <code>{{ u.function_name or '-' }}</code><br/>
-                <code>{{ u.entrypoint or '-' }}</code>
+                <code>{{ u.entrypoint or '-' }}</code><br/>
+                <code class="wrap-code">{{ u.file_path }}</code>
               </div>
             </td>
-            <td>{{ u.status or 'open' }}</td>
-            <td><code class="wrap-code">{{ u.file_path }}</code></td>
             <td><a href="/projects/{{ p.id }}">{{ p.name }}</a></td>
           </tr>
           {% else %}
@@ -90,6 +114,29 @@
       {% endif %}
     </div>
     <script src="/static/app.js"></script>
+    <script>
+      (function(){
+        const selectAll = document.getElementById('selectAllA');
+        const picks = () => Array.from(document.querySelectorAll('.pickA:checked')).map(c=>c.value);
+        const idsField = document.getElementById('bulkIdsA');
+        const idsDelField = document.getElementById('bulkIdsDelA');
+        function sync(){
+          const ids = picks().join(',');
+          if (idsField) idsField.value = ids;
+          if (idsDelField) idsDelField.value = ids;
+        }
+        if (selectAll){
+          selectAll.addEventListener('change', function(){
+            const all = Array.from(document.querySelectorAll('.pickA'));
+            for (const c of all) c.checked = selectAll.checked;
+            sync();
+          });
+        }
+        document.addEventListener('change', function(e){
+          if (e.target && e.target.classList && e.target.classList.contains('pickA')) sync();
+        });
+      })();
+    </script>
   </body>
   </html>
 
